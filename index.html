@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Sistema de Gestão | Visual Inventory</title>
+    <title>Sistema Maizena | Mobile</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -13,43 +13,19 @@
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
-    
     <style>
-        body { 
-            font-family: 'Inter', sans-serif; 
-            background-color: #111111; 
-            color: #ffffff;
-            -webkit-tap-highlight-color: transparent;
-            overscroll-behavior-y: contain;
-        }
+        body { font-family: 'Inter', sans-serif; background-color: #111111; color: #ffffff; -webkit-tap-highlight-color: transparent; }
         .bg-maizena { background-color: #F2C94C; }
         .text-maizena { color: #F2C94C; }
         .border-maizena { border-color: #F2C94C; }
-        .bg-tech-green { background-color: #1DB954; }
-        .bg-soft-red { background-color: #E63946; }
-        .bg-soft-orange { background-color: #F4A261; }
-        
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-thumb { background: #333333; border-radius: 10px; }
-
-        @media print {
-            body * { visibility: hidden; }
-            #receipt-print, #receipt-print * { visibility: visible; }
-            #receipt-print { position: absolute; left: 0; top: 0; width: 100%; }
-        }
-
-        /* Ajuste para cartões não ficarem gigantes no mobile */
-        .product-card { height: 280px; }
-        @media (min-width: 640px) { .product-card { height: 450px; } }
+        .product-card { height: 320px; }
+        @media (min-width: 640px) { .product-card { height: 480px; } }
     </style>
 </head>
 <body>
     <div id="root"></div>
-
     <script type="text/babel">
-        const { useState, useEffect, useMemo, useRef } = React;
-
-        const FORMAS_PAGAMENTO = ["Dinheiro", "Pix", "Pix CNPJ", "Crediário Bemol", "Cartão de débito", "Cartão de crédito"];
+        const { useState, useEffect, useRef } = React;
         const SENHA_ADM_PADRAO = "332133";
 
         const Icon = ({ name, size = 20, className = "" }) => {
@@ -60,401 +36,143 @@
         const App = () => {
             const SUPABASE_URL = "https://swrjwkehfmrhafexhiar.supabase.co";
             const SUPABASE_ANON_KEY = "sb_publishable_x6X8xgVul_BfuNc6sv9P7A_vGcBqwuZ";
-            const supabase = (window.supabase && SUPABASE_URL.startsWith("http")) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+            const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
             const [produtos, setProdutos] = useState(JSON.parse(localStorage.getItem('maizena_produtos')) || []);
             const [vendas, setVendas] = useState(JSON.parse(localStorage.getItem('maizena_vendas')) || []);
-            const [config, setConfig] = useState(JSON.parse(localStorage.getItem('maizena_config')) || { nome: 'MAIZENA CATALOG', logo: '' });
-            const [modal, setModal] = useState({ type: null, data: null });
-            const [abaAtiva, setAbaAtiva] = useState('catalogo');
             const [funcionarios, setFuncionarios] = useState(JSON.parse(localStorage.getItem('maizena_funcs')) || []);
+            const [config, setConfig] = useState(JSON.parse(localStorage.getItem('maizena_config')) || { nome: 'MAIZENA CATALOG', logo: '' });
             const [userLogado, setUserLogado] = useState(JSON.parse(localStorage.getItem('maizena_sessao')) || null);
+            const [abaAtiva, setAbaAtiva] = useState('catalogo');
+            const [modal, setModal] = useState({ type: null, data: null });
+            
             const syncReadyRef = useRef(false);
+            const syncTimerRef = useRef(null);
 
+            // PASSO A PASSO: 1. Carregar do Banco de Dados
             useEffect(() => {
-                if (!supabase) return;
                 (async () => {
-                    const { data } = await supabase.from('app_data').select('*').eq('id', 'main').maybeSingle();
+                    const { data, error } = await supabase.from('app_data').select('*').eq('id', 'main').maybeSingle();
                     if (data) {
-                        setProdutos(data.produtos || []);
-                        setVendas(data.vendas || []);
-                        setConfig(data.config || { nome: 'MAIZENA CATALOG', logo: '' });
-                        setFuncionarios(data.funcionarios || []);
+                        if (data.produtos) setProdutos(data.produtos);
+                        if (data.vendas) setVendas(data.vendas);
+                        if (data.config) setConfig(data.config);
+                        if (data.funcionarios) setFuncionarios(data.funcionarios);
                     }
                     syncReadyRef.current = true;
                 })();
             }, []);
 
+            // PASSO A PASSO: 2. Salvar no Banco de Dados sempre que algo mudar
             useEffect(() => {
                 localStorage.setItem('maizena_produtos', JSON.stringify(produtos));
                 localStorage.setItem('maizena_vendas', JSON.stringify(vendas));
-                localStorage.setItem('maizena_config', JSON.stringify(config));
                 localStorage.setItem('maizena_funcs', JSON.stringify(funcionarios));
-                if (supabase && syncReadyRef.current) {
-                    supabase.from('app_data').upsert([{ id: 'main', produtos, vendas, config, funcionarios }]);
-                }
-            }, [produtos, vendas, config, funcionarios]);
+                localStorage.setItem('maizena_config', JSON.stringify(config));
+                localStorage.setItem('maizena_sessao', JSON.stringify(userLogado));
 
-            const handleEstornoGlobal = (vendaId) => {
-                const v = vendas.find(x => x.id === vendaId);
-                if (!v || v.estornada) return;
-                if (!confirm("Confirmar estorno? O estoque será devolvido.")) return;
+                if (!syncReadyRef.current) return;
 
-                let novosProdutos = [...produtos];
-                if (v.isMulti) {
-                    v.itens.forEach(item => {
-                        novosProdutos = novosProdutos.map(p => p.id === item.id ? { ...p, estoque: p.estoque + 1 } : p);
-                    });
-                } else {
-                    novosProdutos = novosProdutos.map(p => p.id === v.produtoId ? { ...p, estoque: p.estoque + 1 } : p);
-                }
-                setProdutos(novosProdutos);
-                setVendas(vendas.map(x => x.id === vendaId ? { ...x, estornada: true } : x));
-            };
+                if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+                syncTimerRef.current = setTimeout(async () => {
+                    await supabase.from('app_data').upsert([{ 
+                        id: 'main', 
+                        produtos, 
+                        vendas, 
+                        config, 
+                        funcionarios 
+                    }]);
+                }, 1000);
+            }, [produtos, vendas, funcionarios, config, userLogado]);
 
-            const handleVenda = (id, cliente, pagamento) => {
-                const p = produtos.find(item => item.id === id);
-                if (p.estoque <= 0) return alert("Sem estoque!");
-                const nv = {
-                    id: `V-${Date.now()}`, produtoId: id, nome: p.nome, valor: parseFloat(p.valor),
-                    cliente: cliente || "Consumidor", pagamento: pagamento, data: new Date().toISOString(),
-                    estornada: false, isMulti: false, vendedorNome: userLogado.nome
-                };
-                setProdutos(produtos.map(x => x.id === id ? { ...x, estoque: x.estoque - 1 } : x));
-                setVendas([...vendas, nv]);
-                setModal({ type: 'cupom', data: nv });
-            };
-
-            if (!userLogado) return <TelaLogin onLogin={(id, senha) => {
-                if (id === 'admin' && senha === SENHA_ADM_PADRAO) { setUserLogado({ id: 'admin', nome: 'Administrador', role: 'admin' }); return true; }
-                const f = funcionarios.find(u => u.id === id && u.senha === senha);
-                if (f) { setUserLogado({ ...f, role: 'user' }); setAbaAtiva('catalogo'); return true; }
-                alert("Acesso negado"); return false;
-            }} funcionarios={funcionarios} />;
+            if (!userLogado) return (
+                <div className="min-h-screen flex items-center justify-center bg-black p-4">
+                    <div className="bg-zinc-900 p-8 rounded-[40px] w-full max-w-md border border-zinc-800">
+                        <h2 className="text-maizena font-black text-3xl text-center mb-10 uppercase italic">Login</h2>
+                        <div className="space-y-4">
+                            <select className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none" onChange={(e) => setModal({type: 'login-id', data: e.target.value})}>
+                                <option value="">Selecione Usuário</option>
+                                <option value="admin">Administrador</option>
+                                {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
+                            </select>
+                            <input type="password" placeholder="Senha" className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none" id="pass-input" />
+                            <button className="w-full bg-maizena text-black py-5 rounded-2xl font-black uppercase" onClick={() => {
+                                const id = modal.data;
+                                const senha = document.getElementById('pass-input').value;
+                                if (id === 'admin' && senha === SENHA_ADM_PADRAO) setUserLogado({id:'admin', nome:'ADM', role:'admin'});
+                                else {
+                                    const f = funcionarios.find(u => u.id === id && u.senha === senha);
+                                    if(f) setUserLogado({...f, role:'user'});
+                                    else alert("Senha incorreta");
+                                }
+                            }}>Entrar</button>
+                        </div>
+                    </div>
+                </div>
+            );
 
             return (
-                <div className="max-w-[1400px] mx-auto min-h-screen flex flex-col pb-20 sm:pb-0">
-                    <header className="p-4 flex flex-col sm:flex-row justify-between items-center gap-4 border-b border-zinc-800 bg-[#111111] sticky top-0 z-40">
-                        <div className="flex items-center gap-3">
-                            <h1 className="text-xl font-black text-maizena italic uppercase">{config.nome}</h1>
-                        </div>
-                        <div className="flex bg-zinc-900 p-1 rounded-2xl gap-1 w-full sm:w-auto overflow-x-auto no-scrollbar">
-                            <button onClick={() => setAbaAtiva('catalogo')} className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-[10px] font-bold uppercase transition ${abaAtiva === 'catalogo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Catálogo</button>
-                            <button onClick={() => setAbaAtiva('caixa')} className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-[10px] font-bold uppercase transition ${abaAtiva === 'caixa' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Caixa</button>
-                            {userLogado.role === 'admin' && <button onClick={() => setAbaAtiva('admin')} className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-[10px] font-bold uppercase transition ${abaAtiva === 'admin' ? 'bg-white text-black' : 'text-zinc-500'}`}>ADM</button>}
-                            <button onClick={() => setUserLogado(null)} className="px-4 py-2 text-soft-red"><Icon name="log-out" size={16}/></button>
+                <div className="max-w-[1400px] mx-auto min-h-screen flex flex-col">
+                    <header className="p-4 flex justify-between items-center border-b border-zinc-800 bg-[#111111] sticky top-0 z-40">
+                        <h1 className="text-xl font-black text-maizena italic uppercase">{config.nome}</h1>
+                        <div className="flex bg-zinc-900 p-1 rounded-2xl gap-1">
+                            <button onClick={() => setAbaAtiva('catalogo')} className={`px-4 py-2 rounded-xl text-[10px] font-bold ${abaAtiva === 'catalogo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Loja</button>
+                            {userLogado.role === 'admin' && <button onClick={() => setAbaAtiva('admin')} className={`px-4 py-2 rounded-xl text-[10px] font-bold ${abaAtiva === 'admin' ? 'bg-white text-black' : 'text-zinc-500'}`}>ADM</button>}
+                            <button onClick={() => setUserLogado(null)} className="px-4 py-2 text-red-500"><Icon name="log-out" size={16}/></button>
                         </div>
                     </header>
 
                     <main className="p-4 flex-1">
                         {abaAtiva === 'catalogo' && (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-6">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                                 {produtos.map(p => (
-                                    <ProductCard key={p.id} produto={p} podeEditar={userLogado.role === 'admin'}
-                                        onVenda={() => setModal({type: 'venda', data: p})}
-                                        onIncluir={() => setModal({type: 'incluir', data: p})}
-                                        onEdit={() => setModal({type: 'editar', data: p})}
-                                    />
+                                    <div key={p.id} className="bg-maizena rounded-[2rem] overflow-hidden product-card relative">
+                                        <img src={p.imagem} className="w-full h-full object-cover opacity-90" />
+                                        {p.tamanho && (
+                                            <div className="absolute top-4 left-4 bg-black text-maizena font-black text-3xl px-6 py-3 rounded-2xl border-2 border-maizena uppercase">
+                                                {p.tamanho}
+                                            </div>
+                                        )}
+                                        <div className="absolute bottom-4 left-4 right-4 bg-black/80 p-3 rounded-2xl border border-white/10">
+                                            <p className="text-white font-bold text-[10px] uppercase truncate">{p.nome}</p>
+                                            <p className="text-maizena font-black text-sm">R$ {parseFloat(p.valor).toFixed(2)}</p>
+                                        </div>
+                                    </div>
                                 ))}
                             </div>
                         )}
+
                         {abaAtiva === 'admin' && (
-                            <ModuloADM 
-                                funcionarios={funcionarios} setFuncionarios={setFuncionarios} 
-                                produtos={produtos} setProdutos={setProdutos}
-                                vendas={vendas} onEstorno={handleEstornoGlobal}
-                                onAddFunc={() => setModal({type: 'editFunc'})}
-                                onConfig={() => setModal({type: 'config'})}
-                            />
+                            <div className="max-w-xl mx-auto space-y-8">
+                                <div className="bg-zinc-900 p-6 rounded-[32px] border border-zinc-800">
+                                    <h3 className="text-maizena font-black uppercase text-xs mb-4">Novo Funcionário</h3>
+                                    <div className="space-y-3">
+                                        <input id="f-nome" placeholder="Nome" className="w-full bg-black p-4 rounded-xl text-white outline-none border border-zinc-800" />
+                                        <input id="f-senha" placeholder="Senha" className="w-full bg-black p-4 rounded-xl text-white outline-none border border-zinc-800" />
+                                        <button className="w-full bg-tech-green text-black py-4 rounded-xl font-black uppercase" onClick={() => {
+                                            const n = document.getElementById('f-nome').value;
+                                            const s = document.getElementById('f-senha').value;
+                                            if(n && s) {
+                                                setFuncionarios([...funcionarios, {id: Date.now().toString(), nome: n, senha: s}]);
+                                                document.getElementById('f-nome').value = '';
+                                                document.getElementById('f-senha').value = '';
+                                                alert("Funcionário guardado!");
+                                            }
+                                        }}>Guardar Funcionário</button>
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <h3 className="text-zinc-500 font-black uppercase text-[10px] ml-2">Lista de Acesso</h3>
+                                    {funcionarios.map(f => (
+                                        <div key={f.id} className="bg-zinc-900 p-4 rounded-2xl flex justify-between items-center border border-zinc-800">
+                                            <span className="font-bold uppercase text-sm">{f.nome}</span>
+                                            <button onClick={() => setFuncionarios(funcionarios.filter(x => x.id !== f.id))} className="text-red-500"><Icon name="trash" size={18}/></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                         )}
-                        {abaAtiva === 'caixa' && <ModuloCaixa produtos={produtos} funcionarios={funcionarios} onFinalizar={(c, cl, p, t, v) => {
-                            const nv = { id: `V-CX-${Date.now()}`, itens: c, cliente: cl, pagamentos: p, valor: t, data: new Date().toISOString(), isMulti: true, vendedorNome: v.nome };
-                            let nProd = [...produtos];
-                            c.forEach(i => nProd = nProd.map(x => x.id === i.id ? {...x, estoque: x.estoque - 1} : x));
-                            setProdutos(nProd); setVendas([...vendas, nv]); setModal({type: 'cupom', data: nv});
-                        }} />}
                     </main>
-
-                    {userLogado.role === 'admin' && abaAtiva === 'catalogo' && (
-                        <button onClick={() => setModal({type: 'novo'})} className="fixed bottom-6 right-6 bg-tech-green text-black w-14 h-14 rounded-full shadow-2xl flex items-center justify-center z-50 animate-bounce">
-                            <Icon name="plus" size={28}/>
-                        </button>
-                    )}
-
-                    {modal.type === 'venda' && <ModalVenda produto={modal.data} onConfirm={handleVenda} onClose={() => setModal({type: null})} />}
-                    {modal.type === 'novo' && <ModalNovo onSave={(n) => { setProdutos([...produtos, {...n, id: Date.now()}]); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
-                    {modal.type === 'editar' && <ModalNovo onSave={(e) => { setProdutos(produtos.map(p => p.id === e.id ? e : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} produtoParaEditar={modal.data} />}
-                    {modal.type === 'incluir' && <ModalIncluir produto={modal.data} onConfirm={(id, q) => { setProdutos(produtos.map(p => p.id === id ? {...p, estoque: p.estoque + parseInt(q)} : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
-                    {modal.type === 'cupom' && <ModalCupom venda={modal.data} config={config} onClose={() => setModal({type: null})} />}
-                    {modal.type === 'editFunc' && <ModalFuncionario onSave={(f) => { setFuncionarios([...funcionarios, {...f, id: 'F-'+Date.now()}]); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
-                    {modal.type === 'config' && <ModalConfig config={config} onSave={setConfig} onClose={() => setModal({type: null})} />}
-                </div>
-            );
-        };
-
-        const ProductCard = ({ produto, podeEditar, onVenda, onIncluir, onEdit }) => (
-            <div className="bg-maizena rounded-[2rem] overflow-hidden product-card relative group shadow-xl">
-                <img src={produto.imagem || 'https://via.placeholder.com/400'} className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent opacity-70" />
-                
-                {produto.tamanho && (
-                    <div className="absolute top-4 left-4 bg-black text-maizena font-black text-xl sm:text-4xl px-4 py-2 sm:px-8 sm:py-4 rounded-xl sm:rounded-[2rem] border-2 sm:border-4 border-maizena z-10 uppercase shadow-2xl">
-                        {produto.tamanho}
-                    </div>
-                )}
-
-                <div className="absolute bottom-0 left-0 right-0 p-3 sm:p-6 z-10">
-                    <div className="bg-black/80 backdrop-blur-md p-2 sm:p-4 rounded-2xl border border-white/10 mb-2 sm:mb-4">
-                        <h3 className="text-white font-bold text-[10px] sm:text-sm uppercase truncate mb-1">{produto.nome}</h3>
-                        <p className="text-maizena font-black text-sm sm:text-2xl">R$ {parseFloat(produto.valor).toFixed(2)}</p>
-                    </div>
-                    <div className="flex gap-1 sm:gap-2">
-                        <button onClick={onVenda} className="flex-1 bg-tech-green text-black font-black py-2 sm:py-4 rounded-xl text-[10px] sm:text-sm uppercase">Comprar</button>
-                        <button onClick={onIncluir} className="bg-zinc-900 text-white p-2 sm:p-4 rounded-xl"><Icon name="plus" size={14}/></button>
-                        {podeEditar && <button onClick={onEdit} className="bg-white/20 p-2 sm:p-4 rounded-xl text-white"><Icon name="edit-3" size={14}/></button>}
-                    </div>
-                </div>
-            </div>
-        );
-
-        const ModuloADM = ({ funcionarios, setFuncionarios, produtos, setProdutos, vendas, onEstorno, onAddFunc, onConfig }) => (
-            <div className="max-w-4xl mx-auto space-y-6 sm:space-y-10">
-                <div className="flex justify-between items-center">
-                    <h2 className="text-2xl sm:text-3xl font-black uppercase text-white italic">Admin</h2>
-                    <div className="flex gap-2">
-                        <button onClick={onConfig} className="bg-zinc-800 p-3 rounded-xl border border-zinc-700"><Icon name="settings" size={18}/></button>
-                        <button onClick={onAddFunc} className="bg-maizena text-black px-4 py-3 rounded-xl font-black text-[10px] uppercase shadow-lg">Novo Func.</button>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-                    <div className="bg-zinc-900 p-6 rounded-[32px] border border-zinc-800 shadow-xl">
-                        <h3 className="text-soft-red font-black uppercase text-xs mb-4 flex items-center gap-2">
-                            <Icon name="alert-triangle" size={16}/> Limpeza de Dados
-                        </h3>
-                        <div className="grid grid-cols-1 gap-2">
-                            <button onClick={() => { if(confirm("Apagar todos funcionários?")) setFuncionarios([]) }} className="py-3 bg-soft-red/10 text-soft-red border border-soft-red/20 rounded-xl font-black text-[10px] uppercase hover:bg-soft-red hover:text-white transition">Limpar Funcionários</button>
-                            <button onClick={() => { if(confirm("Apagar todos os produtos?")) setProdutos([]) }} className="py-3 bg-soft-red/10 text-soft-red border border-soft-red/20 rounded-xl font-black text-[10px] uppercase hover:bg-soft-red hover:text-white transition">Limpar Catálogo</button>
-                        </div>
-                    </div>
-
-                    <div className="bg-zinc-900 p-6 rounded-[32px] border border-zinc-800 shadow-xl">
-                        <h3 className="text-maizena font-black uppercase text-xs mb-4 flex items-center gap-2">
-                            <Icon name="refresh-ccw" size={16}/> Histórico de Estorno
-                        </h3>
-                        <div className="max-h-48 overflow-y-auto space-y-2 pr-2 custom-scroll">
-                            {vendas.filter(v => !v.estornada).reverse().slice(0, 10).map(v => (
-                                <div key={v.id} className="bg-black p-3 rounded-xl flex justify-between items-center border border-zinc-800">
-                                    <div className="text-[9px]">
-                                        <p className="font-bold text-white uppercase">{v.cliente}</p>
-                                        <p className="text-zinc-500 font-black">R$ {v.valor.toFixed(2)}</p>
-                                    </div>
-                                    <button onClick={() => onEstorno(v.id)} className="bg-soft-orange text-black px-3 py-1.5 rounded-lg font-black text-[9px] uppercase">Estornar</button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
-
-        const ModuloCaixa = ({ produtos, funcionarios, onFinalizar }) => {
-            const [carrinho, setCarrinho] = useState([]);
-            const [cliente, setCliente] = useState('');
-            const [vendedorId, setVendedorId] = useState('');
-            const total = carrinho.reduce((a, b) => a + parseFloat(b.valor), 0);
-            return (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div className="lg:col-span-2 space-y-4">
-                        <div className="bg-zinc-900 p-4 rounded-2xl border border-zinc-800">
-                            <input placeholder="Digite o nome do produto..." className="w-full bg-black p-4 rounded-xl text-white outline-none border border-zinc-800 text-sm" onChange={(e) => {
-                                const p = produtos.find(x => x.nome.toLowerCase() === e.target.value.toLowerCase());
-                                if(p && p.estoque > 0) { setCarrinho([...carrinho, p]); e.target.value = ""; }
-                            }} />
-                        </div>
-                        <div className="bg-zinc-900 p-4 rounded-2xl border border-zinc-800 min-h-[300px]">
-                            <h3 className="text-[10px] font-black uppercase text-zinc-500 mb-3">Carrinho</h3>
-                            {carrinho.map((item, i) => (
-                                <div key={i} className="flex justify-between py-2 border-b border-zinc-800 text-[11px] font-bold uppercase">
-                                    <span>{item.nome}</span>
-                                    <div className="flex gap-3">
-                                        <span>R$ {parseFloat(item.valor).toFixed(2)}</span>
-                                        <button onClick={() => setCarrinho(carrinho.filter((_, idx) => idx !== i))} className="text-soft-red"><Icon name="trash" size={14}/></button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                    <div className="bg-maizena p-6 rounded-[32px] text-black space-y-4 h-fit sticky bottom-4 shadow-2xl">
-                        <h3 className="text-4xl font-black tracking-tighter">R$ {total.toFixed(2)}</h3>
-                        <input placeholder="Cliente" value={cliente} onChange={e => setCliente(e.target.value)} className="w-full bg-white/30 p-4 rounded-xl font-bold border border-black/10 outline-none text-sm placeholder-black/50" />
-                        <select value={vendedorId} onChange={e => setVendedorId(e.target.value)} className="w-full bg-white/30 p-4 rounded-xl font-bold border border-black/10 outline-none text-sm">
-                            <option value="">Selecione Vendedor</option>
-                            <option value="admin">Administrador</option>
-                            {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
-                        </select>
-                        <button disabled={total <= 0 || !vendedorId} onClick={() => {
-                            const v = vendedorId === 'admin' ? {nome:'ADM'} : funcionarios.find(x => x.id === vendedorId);
-                            onFinalizar(carrinho, cliente, "Dinheiro", total, v); setCarrinho([]); setCliente('');
-                        }} className="w-full bg-black text-white py-4 rounded-xl font-black uppercase text-sm disabled:opacity-50 shadow-xl">Finalizar Venda</button>
-                    </div>
-                </div>
-            );
-        };
-
-        const TelaLogin = ({ onLogin, funcionarios }) => {
-            const [id, setId] = useState(''); const [senha, setSenha] = useState('');
-            return (
-                <div className="min-h-screen flex items-center justify-center bg-black p-4">
-                    <div className="bg-zinc-900 p-8 rounded-[40px] w-full max-w-md border border-zinc-800 shadow-2xl">
-                        <h2 className="text-maizena font-black text-3xl text-center mb-10 uppercase italic">Login</h2>
-                        <div className="space-y-4">
-                            <select value={id} onChange={e => setId(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none text-sm">
-                                <option value="">Usuário</option>
-                                <option value="admin">Administrador</option>
-                                {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
-                            </select>
-                            <input type="password" value={senha} onChange={e => setSenha(e.target.value)} placeholder="Senha" className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none text-sm" />
-                            <button onClick={() => onLogin(id, senha)} className="w-full bg-maizena text-black py-5 rounded-2xl font-black uppercase mt-6 shadow-xl active:scale-95 transition">Entrar</button>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const ModalVenda = ({ produto, onConfirm, onClose }) => {
-            const [c, setC] = useState(''); const [p, setP] = useState('Pix');
-            return (
-                <div className="fixed inset-0 bg-black/95 z-50 flex items-end sm:items-center justify-center">
-                    <div className="bg-zinc-900 p-8 rounded-t-[32px] sm:rounded-[40px] w-full max-w-md border-t sm:border border-zinc-800 shadow-2xl">
-                        <h2 className="text-maizena font-black text-xl mb-6 uppercase italic">Venda Rápida</h2>
-                        <div className="bg-black/40 p-4 rounded-2xl mb-6 border border-zinc-800">
-                            <p className="text-white font-bold uppercase text-sm">{produto.nome}</p>
-                            <p className="text-maizena font-black text-2xl mt-1">R$ {parseFloat(produto.valor).toFixed(2)}</p>
-                        </div>
-                        <div className="space-y-4">
-                            <div className="grid grid-cols-2 gap-2">
-                                {FORMAS_PAGAMENTO.map(forma => (
-                                    <button key={forma} onClick={() => setP(forma)} className={`p-3 rounded-xl text-[9px] font-black border transition ${p === forma ? 'bg-maizena text-black border-maizena' : 'bg-black text-zinc-500 border-zinc-800'}`}>{forma.toUpperCase()}</button>
-                                ))}
-                            </div>
-                            <input placeholder="Nome do Cliente" value={c} onChange={e => setC(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white font-bold outline-none text-sm focus:border-maizena" />
-                            <button onClick={() => onConfirm(produto.id, c, p)} className="w-full bg-tech-green text-black py-5 rounded-2xl font-black uppercase shadow-xl active:scale-95 transition">Confirmar Pagamento</button>
-                            <button onClick={onClose} className="w-full text-zinc-500 font-bold uppercase text-xs py-2">Voltar</button>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const ModalNovo = ({ onSave, onClose, produtoParaEditar = null }) => {
-            const [f, setF] = useState(produtoParaEditar || { nome: '', valor: '', estoque: '', imagem: '', tamanho: '', custo: '' });
-            const handleImg = (e) => { const reader = new FileReader(); reader.onload = (ev) => setF({...f, imagem: ev.target.result}); reader.readAsDataURL(e.target.files[0]); };
-            return (
-                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
-                    <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-                        <div className="flex justify-between items-center mb-6">
-                            <h2 className="text-xl font-black text-maizena uppercase italic">{produtoParaEditar ? 'Editar' : 'Novo'} Produto</h2>
-                            <button onClick={onClose} className="text-zinc-500"><Icon name="x"/></button>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-3">
-                                <label className="text-[10px] font-black text-zinc-500 uppercase block ml-1">Nome</label>
-                                <input value={f.nome} onChange={e => setF({...f, nome: e.target.value})} className="w-full bg-black border border-zinc-800 p-3 rounded-xl text-white font-bold outline-none text-sm" />
-                                <div className="grid grid-cols-2 gap-2">
-                                    <div>
-                                        <label className="text-[10px] font-black text-zinc-500 uppercase block ml-1">Preço</label>
-                                        <input type="number" value={f.valor} onChange={e => setF({...f, valor: e.target.value})} className="w-full bg-black border border-zinc-800 p-3 rounded-xl text-white font-bold outline-none text-sm" />
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-black text-zinc-500 uppercase block ml-1">Tamanho</label>
-                                        <input value={f.tamanho} onChange={e => setF({...f, tamanho: e.target.value})} className="w-full bg-black border border-zinc-800 p-3 rounded-xl text-white font-bold outline-none text-sm" />
-                                    </div>
-                                </div>
-                                {!produtoParaEditar && (
-                                    <div>
-                                        <label className="text-[10px] font-black text-zinc-500 uppercase block ml-1">Estoque</label>
-                                        <input type="number" value={f.estoque} onChange={e => setF({...f, estoque: parseInt(e.target.value)})} className="w-full bg-black border border-zinc-800 p-3 rounded-xl text-white font-bold outline-none text-sm" />
-                                    </div>
-                                )}
-                            </div>
-                            <div className="border-2 border-dashed border-zinc-700 rounded-2xl bg-black/40 overflow-hidden relative min-h-[200px] flex items-center justify-center">
-                                {f.imagem ? <img src={f.imagem} className="absolute inset-0 w-full h-full object-cover" /> : <Icon name="camera" className="text-zinc-700" size={40}/>}
-                                <input type="file" onChange={handleImg} className="absolute inset-0 opacity-0 cursor-pointer" />
-                            </div>
-                        </div>
-                        <button onClick={() => onSave(f)} className="w-full bg-tech-green text-black font-black py-4 rounded-xl mt-6 uppercase text-sm shadow-xl">Salvar Produto</button>
-                    </div>
-                </div>
-            );
-        };
-
-        const ModalCupom = ({ venda, config, onClose }) => (
-            <div className="fixed inset-0 bg-black/98 z-50 flex items-center justify-center p-4">
-                <div className="bg-white p-6 w-[300px] text-black shadow-2xl rounded-xl" id="receipt-print">
-                    <div className="text-center border-b border-dashed border-gray-300 pb-4 mb-4">
-                        <h2 className="font-black text-lg italic uppercase">{config.nome}</h2>
-                        <p className="text-[8px] font-bold text-gray-400">Comprovante de Venda</p>
-                    </div>
-                    <div className="text-[9px] space-y-1 mb-4">
-                        <div className="flex justify-between"><span>VENDEDOR:</span><span className="font-bold">{venda.vendedorNome}</span></div>
-                        <div className="flex justify-between"><span>CLIENTE:</span><span className="font-bold">{venda.cliente}</span></div>
-                        <div className="flex justify-between"><span>DATA:</span><span className="font-bold">{new Date(venda.data).toLocaleDateString()}</span></div>
-                    </div>
-                    <div className="border-b border-dashed border-gray-300 mb-4 pb-2">
-                        {venda.itens ? venda.itens.map((i,idx) => <div key={idx} className="flex justify-between text-[10px] font-bold"><span>{i.nome}</span><span>R$ {parseFloat(i.valor).toFixed(2)}</span></div>) : <div className="flex justify-between text-[10px] font-bold"><span>{venda.nome}</span><span>R$ {venda.valor.toFixed(2)}</span></div>}
-                    </div>
-                    <div className="flex justify-between text-sm font-black uppercase"><span>Total</span><span>R$ {venda.valor.toFixed(2)}</span></div>
-                    <div className="no-print mt-8 space-y-2">
-                        <button onClick={() => window.print()} className="w-full bg-black text-white py-3 rounded-lg font-black text-xs uppercase">Imprimir</button>
-                        <button onClick={onClose} className="w-full text-zinc-400 text-[10px] font-bold py-2">Fechar</button>
-                    </div>
-                </div>
-            </div>
-        );
-
-        const ModalIncluir = ({ produto, onConfirm, onClose }) => {
-            const [q, setQ] = useState(1);
-            return (
-                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
-                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-sm text-center">
-                        <h2 className="text-xl font-black text-zinc-400 mb-6 uppercase italic">Repor Estoque</h2>
-                        <p className="text-maizena font-black mb-4 uppercase text-xs">{produto.nome}</p>
-                        <input type="number" value={q} onChange={e => setQ(e.target.value)} className="w-full bg-black text-maizena text-5xl font-black text-center p-6 rounded-3xl mb-8 border border-zinc-800 outline-none" />
-                        <button onClick={() => onConfirm(produto.id, q)} className="w-full bg-tech-green text-black font-black py-5 rounded-2xl uppercase shadow-xl">Adicionar</button>
-                        <button onClick={onClose} className="w-full text-zinc-500 mt-4 font-bold uppercase text-xs">Sair</button>
-                    </div>
-                </div>
-            );
-        };
-
-        const ModalFuncionario = ({ onSave, onClose }) => {
-            const [f, setF] = useState({ nome: '', senha: '', permissoes: { catalogo: true, caixa: true, resumo: true } });
-            return (
-                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
-                    <div className="bg-zinc-900 p-8 rounded-[40px] w-full max-w-md border border-zinc-800 shadow-2xl">
-                        <h2 className="text-maizena font-black text-xl uppercase mb-6 italic">Novo Funcionário</h2>
-                        <div className="space-y-4">
-                            <input placeholder="Nome" value={f.nome} onChange={e => setF({...f, nome: e.target.value})} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white font-bold outline-none text-sm" />
-                            <input type="password" placeholder="Senha" value={f.senha} onChange={e => setF({...f, senha: e.target.value})} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white font-bold outline-none text-sm" />
-                            <button onClick={() => onSave(f)} className="w-full bg-tech-green text-black py-4 rounded-xl font-black uppercase text-sm shadow-xl">Salvar</button>
-                            <button onClick={onClose} className="w-full text-zinc-500 font-bold uppercase text-[10px] py-2">Cancelar</button>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const ModalConfig = ({ config, onSave, onClose }) => {
-            const [c, setC] = useState(config);
-            return (
-                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
-                    <div className="bg-zinc-900 p-8 rounded-[40px] w-full max-w-md border border-zinc-800 shadow-2xl">
-                        <h2 className="text-maizena font-black text-xl uppercase mb-6 italic">Configurações</h2>
-                        <input placeholder="Nome da Loja" value={c.nome} onChange={e => setC({...c, nome: e.target.value})} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white font-bold outline-none text-sm" />
-                        <button onClick={() => {onSave(c); onClose();}} className="w-full bg-maizena text-black py-4 rounded-xl font-black uppercase text-sm mt-4 shadow-xl">Salvar</button>
-                        <button onClick={onClose} className="w-full text-zinc-500 font-bold uppercase text-[10px] py-2">Fechar</button>
-                    </div>
                 </div>
             );
         };
