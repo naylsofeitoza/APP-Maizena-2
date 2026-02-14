@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Gestão | Visual Inventory</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #111111; 
+            color: #ffffff;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .bg-maizena { background-color: #F2C94C; }
+        .text-maizena { color: #F2C94C; }
+        .border-maizena { border-color: #F2C94C; }
+        .bg-tech-green { background-color: #1DB954; }
+        .bg-soft-red { background-color: #E63946; }
+        .bg-soft-orange { background-color: #F4A261; }
+        
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #111111; }
+        ::-webkit-scrollbar-thumb { background: #333333; border-radius: 10px; }
+
+        @media print {
+            body * { visibility: hidden; }
+            #receipt-print, #receipt-print *, #print-summary, #print-summary *, #print-meta, #print-meta * { visibility: visible; }
+            #receipt-print, #print-summary, #print-meta { 
+                position: absolute; 
+                left: 0; 
+                top: 0; 
+                width: 100%; 
+                color: black !important; 
+                background: white !important; 
+                padding: 20px;
+            }
+            .no-print { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const FORMAS_PAGAMENTO = [
+            "Dinheiro", "Pix", "Cartão de débito", "Cartão de crédito"
+        ];
+
+        const SENHA_ADM_PADRAO = "332133";
+
+        const Icon = ({ name, size = 20, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, []);
+            return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
+        };
+
+        const App = () => {
+            const SUPABASE_URL = "https://swrjwkehfmrhafexhiar.supabase.co";
+            const SUPABASE_ANON_KEY = "sb_publishable_x6X8xgVul_BfuNc6sv9P7A_vGcBqwuZ";
+            const supabase =
+                (window.supabase && SUPABASE_URL.startsWith("http") && !SUPABASE_URL.includes("COLE_") && !SUPABASE_ANON_KEY.includes("COLE_"))
+                    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+                    : null;
+
+            const [produtos, setProdutos] = useState(JSON.parse(localStorage.getItem('maizena_produtos')) || []);
+            const [vendas, setVendas] = useState(JSON.parse(localStorage.getItem('maizena_vendas')) || []);
+            const [config, setConfig] = useState(JSON.parse(localStorage.getItem('maizena_config')) || { nome: 'MAIZENA CATALOG', logo: '' });
+            const [modal, setModal] = useState({ type: null, data: null });
+            const [abaAtiva, setAbaAtiva] = useState('catalogo');
+            const [funcionarios, setFuncionarios] = useState(JSON.parse(localStorage.getItem('maizena_funcs')) || []);
+            const [userLogado, setUserLogado] = useState(JSON.parse(localStorage.getItem('maizena_sessao')) || null);
+            const [dbSizePct, setDbSizePct] = useState(0);
+
+            const syncReadyRef = useRef(false);
+            const syncTimerRef = useRef(null);
+
+            useEffect(() => {
+                if (!supabase) return;
+
+                (async () => {
+                    const { data, error } = await supabase
+                        .from('app_data')
+                        .select('produtos,vendas,config,funcionarios')
+                        .eq('id', 'main')
+                        .maybeSingle();
+
+                    if (error) {
+                        alert('Erro ao carregar do banco: ' + error.message);
+                        return;
+                    }
+
+                    if (!data) {
+                        const payload = {
+                            id: 'main',
+                            produtos: produtos || [],
+                            vendas: vendas || [],
+                            config: config || { nome: 'MAIZENA CATALOG', logo: '' },
+                            funcionarios: funcionarios || []
+                        };
+
+                        const { error: insErr } = await supabase.from('app_data').insert([payload]);
+                        if (insErr) alert('Erro ao criar registro inicial no banco: ' + insErr.message);
+
+                        syncReadyRef.current = true;
+                        return;
+                    }
+
+                    setProdutos(Array.isArray(data.produtos) ? data.produtos : []);
+                    setVendas(Array.isArray(data.vendas) ? data.vendas : []);
+                    setConfig(data.config || { nome: 'MAIZENA CATALOG', logo: '' });
+                    setFuncionarios(Array.isArray(data.funcionarios) ? data.funcionarios : []);
+
+                    syncReadyRef.current = true;
+                })();
+            }, []);
+
+            useEffect(() => {
+                localStorage.setItem('maizena_produtos', JSON.stringify(produtos));
+                localStorage.setItem('maizena_vendas', JSON.stringify(vendas));
+                localStorage.setItem('maizena_config', JSON.stringify(config));
+                localStorage.setItem('maizena_funcs', JSON.stringify(funcionarios));
+                
+                try {
+                    const dataString = JSON.stringify({ produtos, vendas, funcionarios, config });
+                    const bytes = new TextEncoder().encode(dataString).length;
+                    const limiteBytes = 5 * 1024 * 1024; 
+                    const pct = Math.min((bytes / limiteBytes) * 100, 100).toFixed(1);
+                    setDbSizePct(pct);
+                } catch (e) {
+                    setDbSizePct(0);
+                }
+            }, [produtos, vendas, config, funcionarios]);
+
+            useEffect(() => {
+                localStorage.setItem('maizena_sessao', JSON.stringify(userLogado));
+            }, [userLogado]);
+
+            useEffect(() => {
+                if (!supabase) return;
+                if (!syncReadyRef.current) return;
+
+                if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+
+                syncTimerRef.current = setTimeout(async () => {
+                    const payload = {
+                        id: 'main',
+                        produtos: produtos || [],
+                        vendas: vendas || [],
+                        config: config || { nome: 'MAIZENA CATALOG', logo: '' },
+                        funcionarios: funcionarios || []
+                    };
+
+                    const { error } = await supabase
+                        .from('app_data')
+                        .upsert([payload], { onConflict: 'id' });
+
+                    if (error) {
+                        console.error(error);
+                    }
+                }, 800);
+
+                return () => {
+                    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+                };
+            }, [produtos, vendas, config, funcionarios]);
+
+            const handleLogin = (id, senha) => {
+                if (id === 'admin' && senha === SENHA_ADM_PADRAO) {
+                    setUserLogado({ id: 'admin', nome: 'Administrador', role: 'admin' });
+                    setAbaAtiva('catalogo');
+                    return true;
+                }
+                const f = funcionarios.find(u => u.id === id && u.senha === senha);
+                if (f) {
+                    setUserLogado({ ...f, role: 'user' });
+                    if (f.permissoes.catalogo) setAbaAtiva('catalogo');
+                    else if (f.permissoes.caixa) setAbaAtiva('caixa');
+                    else setAbaAtiva('resumo');
+                    return true;
+                }
+                alert("Credenciais incorretas");
+                return false;
+            };
+
+            const logout = () => {
+                setUserLogado(null);
+                setAbaAtiva('catalogo');
+            };
+
+            const temAcesso = (modulo) => {
+                if (!userLogado) return false;
+                if (userLogado.role === 'admin') return true;
+                if (modulo === 'reservados' && userLogado.permissoes.reservados === undefined) return true;
+                return userLogado.permissoes[modulo];
+            };
+
+            const handleVenda = (id, cliente, pagamentosList) => {
+                const p = produtos.find(item => item.id === id);
+                if (p.estoque <= 0) return alert("Estoque esgotado!");
+
+                const isArray = Array.isArray(pagamentosList);
+                const pagamentoStr = isArray ? pagamentosList.map(x => x.forma).join(" + ") : pagamentosList;
+                const pagamentosObj = isArray ? pagamentosList : [{ forma: pagamentosList, valor: parseFloat(p.valor) }];
+
+                const novaVenda = {
+                    id: `V-${Date.now()}`,
+                    produtoId: id,
+                    nome: p.nome,
+                    valor: parseFloat(p.valor),
+                    cliente: cliente || "Consumidor",
+                    pagamento: pagamentoStr,
+                    pagamentos: pagamentosObj,
+                    data: new Date().toISOString(),
+                    estornada: false,
+                    isMulti: true, 
+                    itens: [{ ...p, valor: p.valor }],
+                    vendedorId: userLogado.id,
+                    vendedorNome: userLogado.nome
+                };
+
+                setProdutos(produtos.map(item => item.id === id ? { ...item, estoque: item.estoque - 1 } : item));
+                setVendas([...vendas, novaVenda]);
+                setModal({ type: 'cupom', data: novaVenda });
+            };
+
+            const handleFinalizarCaixa = (itensCarrinho, cliente, pagamentosMultiplos, total, vendedor) => {
+                const novaVendaMaster = {
+                    id: `V-CX-${Date.now()}`,
+                    itens: itensCarrinho,
+                    cliente: cliente || "Consumidor",
+                    pagamentos: pagamentosMultiplos,
+                    total: total,
+                    data: new Date().toISOString(),
+                    isMulti: true,
+                    nome: itensCarrinho.map(i => i.nome).join(", "),
+                    valor: total,
+                    pagamento: pagamentosMultiplos.map(p => p.forma).join(" + "),
+                    vendedorId: vendedor.id,
+                    vendedorNome: vendedor.nome
+                };
+
+                let novosProdutos = [...produtos];
+                itensCarrinho.forEach(item => {
+                    novosProdutos = novosProdutos.map(p => p.id === item.id ? { ...p, estoque: p.estoque - 1 } : p);
+                });
+
+                setProdutos(novosProdutos);
+                setVendas([...vendas, novaVendaMaster]);
+                setModal({ type: 'cupom', data: novaVendaMaster });
+            };
+
+            const handleFinalizarReserva = (nome, telefone, comprovante) => {
+                const { carrinho, total, vendedor } = modal.data;
+
+                const novaVendaMaster = {
+                    id: `R-CX-${Date.now()}`,
+                    itens: carrinho,
+                    cliente: nome || "Consumidor",
+                    telefone: telefone,
+                    comprovantePix: comprovante,
+                    pagamentos: [{ forma: 'Pix Reserva', valor: total }],
+                    total: total,
+                    data: new Date().toISOString(),
+                    isMulti: true,
+                    isReserva: true,
+                    retirado: false,
+                    nome: carrinho.map(i => i.nome).join(", "),
+                    valor: total,
+                    pagamento: "Pix Reserva",
+                    vendedorId: vendedor.id,
+                    vendedorNome: vendedor.nome
+                };
+
+                let novosProdutos = [...produtos];
+                carrinho.forEach(item => {
+                    novosProdutos = novosProdutos.map(p => p.id === item.id ? { ...p, estoque: p.estoque - 1 } : p);
+                });
+
+                setProdutos(novosProdutos);
+                setVendas([...vendas, novaVendaMaster]);
+                setModal({ type: 'cupom', data: novaVendaMaster });
+            };
+
+            const handleToggleRetirado = (id) => {
+                setVendas(vendas.map(v => v.id === id ? { ...v, retirado: !v.retirado } : v));
+            };
+
+            const saveFuncionario = (f) => {
+                if (f.id) {
+                    setFuncionarios(funcionarios.map(item => item.id === f.id ? f : item));
+                } else {
+                    setFuncionarios([...funcionarios, { ...f, id: 'F-' + Date.now() }]);
+                }
+                setModal({ type: null });
+            };
+
+            const handleResetData = (tipo) => {
+                if (tipo === 'vendas') {
+                    if (window.confirm("🔴 AVISO: Isso apagará TODO o histórico de vendas permanentemente. Quer mesmo continuar?")) {
+                        setVendas([]);
+                        alert("Histórico de vendas apagado com sucesso.");
+                    }
+                } else if (tipo === 'tudo') {
+                    if (window.confirm("💀 PERIGO EXTREMO: Você está prestes a APAGAR TODO O SISTEMA (Produtos, Vendas, Funcionários e Configurações). Confirma?")) {
+                        const pass = window.prompt("Para sua segurança, digite a palavra APAGAR em maiúsculo para confirmar:");
+                        if (pass === 'APAGAR') {
+                            setProdutos([]);
+                            setVendas([]);
+                            setFuncionarios([]);
+                            setConfig({ nome: 'MAIZENA CATALOG', logo: '' });
+                            logout();
+                            alert("O sistema foi totalmente zerado.");
+                        } else {
+                            alert("Ação cancelada. A palavra de segurança não confere.");
+                        }
+                    }
+                }
+            };
+
+            if (!userLogado) {
+                return <TelaLogin onLogin={handleLogin} funcionarios={funcionarios} />;
+            }
+
+            return (
+                <div className="max-w-[1400px] mx-auto min-h-screen border-x border-zinc-800 flex flex-col">
+                    <header className="p-6 flex flex-wrap gap-4 justify-between items-center border-b border-zinc-800 bg-[#111111] sticky top-0 z-40">
+                        <div className="flex items-center gap-4">
+                            {config.logo && <img src={config.logo} className="h-12 w-12 object-contain rounded-lg" />}
+                            <div>
+                                <h1 className="text-2xl font-black tracking-tighter text-maizena italic uppercase">{config.nome}</h1>
+                                <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">
+                                    {userLogado.nome} • {userLogado.role.toUpperCase()}
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <div className="flex bg-zinc-900 p-1 rounded-2xl border border-zinc-800 flex-wrap gap-1">
+                            {temAcesso('catalogo') && <button onClick={() => setAbaAtiva('catalogo')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'catalogo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Catálogo</button>}
+                            {temAcesso('caixa') && <button onClick={() => setAbaAtiva('caixa')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'caixa' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Caixa</button>}
+                            {temAcesso('reservados') && <button onClick={() => setAbaAtiva('reservados')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'reservados' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Reservados</button>}
+                            {userLogado.role === 'admin' && <button onClick={() => setAbaAtiva('admin')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'admin' ? 'bg-white text-black' : 'text-zinc-500'}`}>ADM</button>}
+                            <button onClick={logout} className="px-4 py-2 text-soft-red"><Icon name="log-out" size={18}/></button>
+                        </div>
+
+                        {temAcesso('configuracoes') && (
+                            <button onClick={() => setModal({type: 'novo'})} className="bg-tech-green text-black px-6 py-3 rounded-2xl font-black text-sm flex items-center gap-2 hover:scale-105 transition">
+                                <Icon name="plus" size={18}/> INCLUIR PRODUTO
+                            </button>
+                        )}
+                    </header>
+
+                    <main className="p-6 flex-1">
+                        {abaAtiva === 'catalogo' && (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+                                {produtos.map(p => (
+                                    <ProductCard 
+                                        key={p.id} 
+                                        produto={p} 
+                                        podeEditar={temAcesso('configuracoes')}
+                                        onVenda={() => setModal({type: 'venda', data: p})}
+                                        onIncluir={() => setModal({type: 'incluir', data: p})}
+                                        onAlterarEstoque={() => setModal({type: 'alterar_estoque', data: p})}
+                                        onEstorno={() => setModal({type: 'estorno_lista', data: p})}
+                                        onEdit={() => setModal({type: 'editar', data: p})}
+                                        onDelete={() => {
+                                            if(confirm("Deseja remover este produto?")) 
+                                                setProdutos(produtos.filter(item => item.id !== p.id))
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                        )}
+                        {abaAtiva === 'caixa' && <ModuloCaixa produtos={produtos} funcionarios={funcionarios} onFinalizar={handleFinalizarCaixa} onReservar={(carrinho, total, vendedor) => setModal({type: 'reserva', data: {carrinho, total, vendedor}})} />}
+                        {abaAtiva === 'resumo' && <ResumoDiario vendas={vendas} config={config} user={userLogado} onViewReserva={(v) => setModal({type: 'ver_reserva', data: v})} />}
+                        {abaAtiva === 'reservados' && <ModuloReservados vendas={vendas} onViewReserva={(v) => setModal({type: 'ver_reserva', data: v})} onToggleRetirado={handleToggleRetirado} />}
+                        {abaAtiva === 'metas' && <ModuloMetas user={userLogado} vendas={vendas} funcionarios={funcionarios} />}
+                        {abaAtiva === 'admin' && <ModuloADM funcionarios={funcionarios} setFuncionarios={setFuncionarios} onEditFunc={(f) => setModal({type: 'editFunc', data: f})} onAddFunc={() => setModal({type: 'editFunc', data: null})} onConfig={() => setModal({type: 'config'})} setAbaAtiva={setAbaAtiva} dbSizePct={dbSizePct} onResetData={handleResetData} />}
+                    </main>
+
+                    {modal.type === 'novo' && <ModalNovo onSave={(n) => { setProdutos([...produtos, {...n, id: Date.now()}]); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'editar' && <ModalNovo onSave={(e) => { setProdutos(produtos.map(p => p.id === e.id ? e : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} produtoParaEditar={modal.data} />}
+                    {modal.type === 'venda' && <ModalVenda produto={modal.data} onConfirm={handleVenda} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'incluir' && <ModalIncluir produto={modal.data} onConfirm={(id, q) => { setProdutos(produtos.map(p => p.id === id ? {...p, estoque: p.estoque + parseInt(q)} : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'alterar_estoque' && <ModalAlterarEstoque produto={modal.data} onConfirm={(id, novo) => { const val = parseInt(novo); if (isNaN(val) || val < 0) return alert('Informe um estoque válido (0 ou mais).'); setProdutos(produtos.map(p => p.id === id ? {...p, estoque: val} : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'cupom' && <ModalCupom venda={modal.data} config={config} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'config' && <ModalConfig config={config} onSave={setConfig} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'reserva' && <ModalReserva onConfirm={handleFinalizarReserva} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'ver_reserva' && <ModalVerReserva venda={modal.data} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'estorno_lista' && (
+                        <ModalListaEstorno 
+                            produto={modal.data} 
+                            vendas={vendas.filter(v => (v.isMulti ? v.itens.some(i => i.id === modal.data.id) : v.produtoId === modal.data.id) && !v.estornada)}
+                            onConfirm={(vid) => {
+                                const v = vendas.find(x => x.id === vid);
+                                setVendas(vendas.map(x => x.id === vid ? {...x, estornada: true} : x));
+                                if(v.isMulti) {
+                                    let nProd = [...produtos];
+                                    v.itens.forEach(i => nProd = nProd.map(p => p.id === i.id ? {...p, estoque: p.estoque + 1} : p));
+                                    setProdutos(nProd);
+                                } else {
+                                    setProdutos(produtos.map(p => p.id === v.produtoId ? {...p, estoque: p.estoque + 1} : p));
+                                }
+                                setModal({type: null});
+                            }}
+                            onClose={() => setModal({type: null})}
+                        />
+                    )}
+                    {modal.type === 'editFunc' && <ModalFuncionario funcionario={modal.data} onSave={saveFuncionario} onClose={() => setModal({type: null})} />}
+                </div>
+            );
+        };
+
+        const TelaLogin = ({ onLogin, funcionarios }) => {
+            const [id, setId] = useState('');
+            const [senha, setSenha] = useState('');
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-black p-4">
+                    <div className="bg-zinc-900 p-8 rounded-[40px] w-full max-w-md border border-zinc-800 shadow-2xl">
+                        <div className="text-center mb-10 flex flex-col items-center">
+                            <img src="logo.jpg" alt="Bloco da Maizena" className="w-64 max-w-full mx-auto" />
+                        </div>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-[10px] font-black text-zinc-500 uppercase block mb-2 ml-1">Usuário / Funcionário</label>
+                                <select value={id} onChange={e => setId(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none">
+                                    <option value="">Selecione...</option>
+                                    <option value="admin">ADMINISTRADOR</option>
+                                    {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-zinc-500 uppercase block mb-2 ml-1">Senha de Acesso</label>
+                                <input type="password" value={senha} onChange={e => setSenha(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none" />
+                            </div>
+                            <button onClick={() => onLogin(id, senha)} className="w-full bg-maizena text-black py-5 rounded-2xl font-black text-sm uppercase mt-6 hover:scale-[1.02] transition">ENTRAR NO SISTEMA</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModuloADM = ({ funcionarios, setFuncionarios, onEditFunc, onAddFunc, onConfig, setAbaAtiva, dbSizePct, onResetData }) => (
+            <div className="max-w-4xl mx-auto space-y-10">
+                <div className="flex flex-col gap-8">
+                    <div>
+                        <h2 className="text-4xl font-black italic uppercase text-white tracking-tighter">Painel de Controle</h2>
+                        <p className="text-zinc-500 font-bold text-xs uppercase italic mt-1">Gestão central do sistema</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-4">
+                            <button onClick={() => setAbaAtiva('resumo')} className="w-full bg-zinc-900 text-maizena p-6 rounded-[32px] border border-zinc-800 font-black text-sm uppercase hover:bg-zinc-800 transition flex items-center justify-between shadow-lg">
+                                <div className="flex items-center gap-4"><Icon name="file-text" size={24}/> Relatório de Vendas</div>
+                                <Icon name="chevron-right" size={20} className="text-zinc-600"/>
+                            </button>
+                            <button onClick={() => setAbaAtiva('metas')} className="w-full bg-zinc-900 text-maizena p-6 rounded-[32px] border border-zinc-800 font-black text-sm uppercase hover:bg-zinc-800 transition flex items-center justify-between shadow-lg">
+                                <div className="flex items-center gap-4"><Icon name="trending-up" size={24}/> Metas e Comissões</div>
+                                <Icon name="chevron-right" size={20} className="text-zinc-600"/>
+                            </button>
+                        </div>
+                        <div className="space-y-4">
+                            <button onClick={onConfig} className="w-full bg-zinc-900 text-white p-6 rounded-[32px] border border-zinc-800 font-black text-sm uppercase hover:bg-zinc-800 transition flex items-center justify-between shadow-lg">
+                                <div className="flex items-center gap-4"><Icon name="settings" size={24}/> Configurar Loja</div>
+                                <Icon name="chevron-right" size={20} className="text-zinc-600"/>
+                            </button>
+                            <button onClick={onAddFunc} className="w-full bg-maizena text-black p-6 rounded-[32px] font-black text-sm uppercase hover:scale-[1.02] transition flex items-center justify-between shadow-lg">
+                                <div className="flex items-center gap-4"><Icon name="user-plus" size={24}/> Novo Funcionário</div>
+                                <Icon name="chevron-right" size={20} className="opacity-50"/>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] shadow-xl">
+                        <div className="flex justify-between items-end mb-6">
+                            <div>
+                                <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Uso de Memória do Banco de Dados</p>
+                                <h3 className="text-4xl font-black text-white tracking-tighter">{dbSizePct}% <span className="text-xs text-zinc-500 uppercase tracking-normal">usado</span></h3>
+                            </div>
+                            <Icon name="database" className={dbSizePct > 80 ? "text-soft-red" : "text-tech-green"} size={40} />
+                        </div>
+                        <div className="w-full h-4 bg-black rounded-full overflow-hidden border border-zinc-800">
+                            <div className={`h-full transition-all duration-1000 ${dbSizePct > 80 ? 'bg-soft-red' : 'bg-tech-green'}`} style={{ width: `${dbSizePct}%` }} />
+                        </div>
+                        <p className="text-[10px] text-zinc-500 uppercase mt-4 font-bold flex items-center gap-2">
+                            <Icon name="info" size={14}/> Ao atingir limites altos, limpe o histórico de vendas para manter o sistema rápido.
+                        </p>
+                    </div>
+
+                    <div className="bg-soft-red/10 border border-soft-red/20 p-8 rounded-[40px] shadow-xl">
+                        <h3 className="text-soft-red font-black uppercase text-sm mb-6 flex items-center gap-2 tracking-widest">
+                            <Icon name="alert-triangle" size={20}/> Zona de Perigo
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <button onClick={() => onResetData('vendas')} className="bg-black/50 border border-soft-red/30 text-white p-5 rounded-3xl font-black text-xs uppercase hover:bg-soft-red hover:text-black transition flex justify-center items-center gap-3">
+                                <Icon name="trash-2" size={18}/> Limpar Apenas Vendas
+                            </button>
+                            <button onClick={() => onResetData('tudo')} className="bg-soft-red text-black p-5 rounded-3xl font-black text-xs uppercase hover:bg-red-600 transition flex justify-center items-center gap-3 shadow-lg hover:scale-[1.02]">
+                                <Icon name="skull" size={18}/> Zerar Sistema Totalmente
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-4 ml-2">Funcionários Cadastrados</h3>
+                    <div className="grid gap-4">
+                        {funcionarios.map(f => (
+                            <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] flex justify-between items-center shadow-lg">
+                                <div>
+                                    <h3 className="font-black text-lg text-white uppercase">{f.nome}</h3>
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        {Object.entries(f.permissoes).map(([k, v]) => v && (
+                                            <span key={k} className="text-[8px] bg-black text-zinc-500 px-2 py-1 rounded-full font-black uppercase border border-zinc-800">{k}</span>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => onEditFunc(f)} className="p-4 bg-zinc-800 rounded-2xl text-white hover:bg-zinc-700 transition"><Icon name="edit" size={18}/></button>
+                                    <button onClick={() => { if(confirm("Deseja realmente excluir este funcionário?")) setFuncionarios(funcionarios.filter(x => x.id !== f.id)) }} className="p-4 bg-soft-red/10 border border-soft-red/20 text-soft-red rounded-2xl hover:bg-soft-red hover:text-black transition"><Icon name="trash" size={18}/></button>
+                                </div>
+                            </div>
+                        ))}
+                        {funcionarios.length === 0 && <p className="text-center py-20 text-zinc-600 font-bold uppercase border-2 border-dashed border-zinc-800 rounded-[40px]">Nenhum funcionário cadastrado</p>}
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ModalFuncionario = ({ funcionario, onSave, onClose }) => {
+            const [f, setF] = useState(funcionario || { 
+                nome: '', senha: '', meta: 0, comissao: 0,
+                permissoes: { catalogo: true, caixa: true, resumo: true, reservados: true, configuracoes: false, metas: true, comissao: false }
+            });
+
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-2xl shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                        <h2 className="text-2xl font-black mb-8 text-maizena italic uppercase">Gestão de Funcionário</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div className="space-y-4">
+                                <Input label="Nome do Funcionário" value={f.nome} onChange={v => setF({...f, nome: v})} />
+                                <Input label="Senha Individual" type="password" value={f.senha} onChange={v => setF({...f, senha: v})} />
+                                <Input label="Meta Mensal (R$)" type="number" value={f.meta} onChange={v => setF({...f, meta: parseFloat(v)})} />
+                                <Input label="Comissão (%)" type="number" value={f.comissao} onChange={v => setF({...f, comissao: parseFloat(v)})} />
+                            </div>
+                            <div className="bg-black/40 p-6 rounded-3xl border border-zinc-800">
+                                <p className="text-[10px] font-black text-zinc-500 uppercase mb-4 tracking-widest">Permissões de Acesso</p>
+                                <div className="grid grid-cols-1 gap-3">
+                                    {Object.keys(f.permissoes).map(key => (
+                                        <label key={key} className="flex items-center justify-between p-3 bg-zinc-900 rounded-xl cursor-pointer hover:bg-zinc-800 transition">
+                                            <span className="text-xs font-bold text-white uppercase">{key}</span>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={f.permissoes[key]} 
+                                                onChange={e => setF({...f, permissoes: {...f.permissoes, [key]: e.target.checked}})}
+                                                className="w-5 h-5 accent-maizena"
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex gap-4 mt-10">
+                            <button onClick={() => onSave(f)} className="flex-1 bg-tech-green text-black font-black py-4 rounded-2xl uppercase shadow-lg hover:scale-105 transition">SALVAR</button>
+                            <button onClick={onClose} className="px-8 text-zinc-500 font-bold uppercase hover:text-white">CANCELAR</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModuloMetas = ({ user, vendas, funcionarios }) => {
+            const targets = user.role === 'admin' ? funcionarios : [funcionarios.find(f => f.id === user.id)].filter(Boolean);
+
+            return (
+                <div className="max-w-5xl mx-auto space-y-10">
+                    <div className="flex justify-between items-end">
+                        <div>
+                            <h2 className="text-4xl font-black italic uppercase tracking-tighter">Performance & Metas</h2>
+                            <p className="text-zinc-500 font-bold text-xs uppercase italic">Acompanhamento de resultados</p>
+                        </div>
+                        <button onClick={() => window.print()} className="bg-zinc-800 text-white px-6 py-3 rounded-xl font-black text-xs border border-zinc-700 hover:bg-zinc-700 transition">IMPRIMIR RELATÓRIO</button>
+                    </div>
+
+                    <div id="print-meta" className="grid grid-cols-1 gap-8">
+                        {targets.map(f => {
+                            const totalVendido = vendas
+                                .filter(v => v.vendedorId === f.id && !v.estornada)
+                                .reduce((acc, v) => acc + v.valor, 0);
+                            const porc = Math.min((totalVendido / (f.meta || 1)) * 100, 100);
+                            const comissao = (totalVendido * (f.comissao || 0)) / 100;
+
+                            return (
+                                <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-10 rounded-[40px] shadow-xl">
+                                    <div className="flex flex-wrap justify-between items-start mb-8 gap-4">
+                                        <div>
+                                            <h3 className="text-2xl font-black text-white uppercase italic">{f.nome}</h3>
+                                            <p className="text-zinc-500 font-bold text-[10px] uppercase">Vendedor(a) Responsável</p>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-[10px] font-black text-zinc-500 uppercase">Comissão Acumulada</p>
+                                            <p className="text-2xl font-black text-tech-green">R$ {comissao.toFixed(2)}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-center">
+                                        <div className="col-span-2">
+                                            <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest">
+                                                <span className="text-zinc-400">Progresso da Meta</span>
+                                                <span className="text-maizena">{porc.toFixed(1)}%</span>
+                                            </div>
+                                            <div className="w-full h-6 bg-black rounded-full overflow-hidden border border-zinc-800">
+                                                <div className="h-full bg-maizena transition-all duration-1000" style={{ width: `${porc}%` }} />
+                                            </div>
+                                            <div className="flex justify-between mt-4">
+                                                <div>
+                                                    <p className="text-[10px] font-black text-zinc-500 uppercase">Já Vendido</p>
+                                                    <p className="text-xl font-black">R$ {totalVendido.toFixed(2)}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-[10px] font-black text-zinc-500 uppercase">Falta para Meta</p>
+                                                    <p className="text-xl font-black text-soft-orange">R$ {Math.max(f.meta - totalVendido, 0).toFixed(2)}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-black/50 p-6 rounded-3xl border border-zinc-800 text-center">
+                                            <p className="text-[10px] font-black text-zinc-500 uppercase mb-1">Meta Definida</p>
+                                            <p className="text-3xl font-black text-white">R$ {parseFloat(f.meta || 0).toFixed(2)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        {targets.length === 0 && <p className="text-center py-20 text-zinc-600 font-bold uppercase italic border-2 border-dashed border-zinc-800 rounded-[40px]">Sem dados de metas para exibir</p>}
+                    </div>
+                </div>
+            );
+        };
+
+        const ProductCard = ({ produto, podeEditar, onVenda, onIncluir, onAlterarEstoque, onEstorno, onEdit, onDelete }) => (
+            <div className="bg-maizena rounded-3xl overflow-hidden h-[250px] relative group shadow-xl">
+                <img src={produto.imagem || 'https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=400'} className="w-full h-full object-cover transition duration-500 group-hover:scale-110" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80" />
+                
+                {produto.tamanho && (
+                    <div className="absolute top-3 left-3 bg-black text-maizena font-black text-xl px-8 py-4 rounded-3xl border-2 border-maizena/40 shadow-2xl z-10 uppercase">
+                        {produto.tamanho}
+                    </div>
+                )}
+
+                {podeEditar && (
+                    <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-all z-10">
+                        <button onClick={onEdit} className="bg-black/70 backdrop-blur-md text-white p-2 rounded-xl hover:bg-black"><Icon name="edit-3" size={14}/></button>
+                        <button onClick={onDelete} className="bg-soft-red/90 backdrop-blur-md text-white p-2 rounded-xl hover:bg-soft-red"><Icon name="x" size={14}/></button>
+                    </div>
+                )}
+
+                <div className="absolute bottom-0 left-0 right-0 p-3 z-10">
+                    <div className="flex justify-between items-end mb-2">
+                        <div className="bg-black/80 backdrop-blur-md p-2 rounded-2xl border border-white/10 max-w-[70%]">
+                            <h3 className="text-white font-bold text-[10px] leading-tight uppercase tracking-tight truncate mb-1">{produto.nome}</h3>
+                            <p className="text-maizena font-black text-sm">R$ {parseFloat(produto.valor).toFixed(2)}</p>
+                            {produto.custo > 0 && <p className="text-[7px] text-white/50 font-bold mt-1">CUSTO: R$ {parseFloat(produto.custo).toFixed(2)}</p>}
+                        </div>
+                        <div className="bg-white p-2 rounded-xl text-center min-w-[40px] shadow-xl">
+                            <span className="block text-[7px] font-black text-zinc-400 uppercase leading-none mb-1">QTD</span>
+                            <span className="text-black font-black text-sm">{produto.estoque}</span>
+                        </div>
+                    </div>
+                    <div className="flex gap-1 translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300">
+                        <button onClick={onVenda} className="flex-1 bg-tech-green text-black font-black py-2 rounded-xl text-[10px] flex items-center justify-center gap-1">
+                            <Icon name="shopping-bag" size={14}/> COMPRAR
+                        </button>
+                        <button onClick={onIncluir} className="bg-zinc-900 text-white p-2 rounded-xl hover:bg-black transition"><Icon name="plus" size={14}/></button>
+                        {podeEditar && <button onClick={onAlterarEstoque} className="bg-black/70 backdrop-blur-md text-white p-2 rounded-xl hover:bg-black transition"><Icon name="edit-2" size={14}/></button>}
+                        {podeEditar && <button onClick={onAlterarEstoque} className="bg-black/70 backdrop-blur-md text-white p-2 rounded-xl hover:bg-black transition"><Icon name="edit-2" size={14}/></button>}
+                        {podeEditar && <button onClick={onEstorno} className="bg-soft-orange text-black p-2 rounded-xl hover:bg-orange-400 transition"><Icon name="refresh-ccw" size={14}/></button>}
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ModuloCaixa = ({ produtos, funcionarios, onFinalizar, onReservar }) => {
+            const [busca, setBusca] = useState('');
+            const [carrinho, setCarrinho] = useState([]);
+            const [cliente, setCliente] = useState('');
+            const [pagamentos, setPagamentos] = useState([]);
+            const [vendedorId, setVendedorId] = useState('');
+            
+            const filtrados = busca.length > 1 ? produtos.filter(p => 
+                p.nome.toLowerCase().includes(busca.toLowerCase())
+            ) : [];
+
+            const total = carrinho.reduce((acc, item) => acc + parseFloat(item.valor), 0);
+            const totalPago = pagamentos.reduce((acc, p) => acc + parseFloat(p.valor || 0), 0);
+
+            const addAoCarrinho = (p) => {
+                if(p.estoque <= 0) return alert("Sem estoque!");
+                setCarrinho([...carrinho, p]);
+                setBusca('');
+            };
+
+            const addPagamento = (forma) => {
+                const resto = total - totalPago;
+                if(resto <= 0) return;
+                setPagamentos([...pagamentos, { forma, valor: resto }]);
+            };
+
+            const processarFinalizacao = () => {
+                if (!vendedorId) return alert("A seleção do vendedor é obrigatória para finalizar a venda.");
+                
+                const vendedorObj = vendedorId === 'admin' 
+                    ? { id: 'admin', nome: 'Administrador' } 
+                    : funcionarios.find(f => f.id === vendedorId);
+                
+                onFinalizar(carrinho, cliente, pagamentos, total, vendedorObj);
+            };
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-6xl mx-auto">
+                    <div className="lg:col-span-2 space-y-6">
+                        <div className="bg-zinc-900 p-6 rounded-[32px] border-2 border-dashed border-zinc-800">
+                            <label className="block text-[10px] font-black text-maizena uppercase tracking-widest mb-3">Selecione o Vendedor Responsável *</label>
+                            <select 
+                                value={vendedorId} 
+                                onChange={e => setVendedorId(e.target.value)} 
+                                className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none focus:border-maizena"
+                            >
+                                <option value="">ESCOLHER VENDEDOR...</option>
+                                <option value="admin">ADMINISTRADOR</option>
+                                {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
+                            </select>
+                        </div>
+
+                        <div className="bg-zinc-900 p-6 rounded-[32px] border border-zinc-800">
+                            <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3">Pesquisar Produto (Nome)</label>
+                            <div className="relative">
+                                <input autoFocus value={busca} onChange={e => setBusca(e.target.value)} placeholder="Digite o nome para buscar..." className="w-full bg-black border border-zinc-800 p-5 rounded-2xl text-white font-bold outline-none focus:border-maizena" />
+                                {filtrados.length > 0 && (
+                                    <div className="absolute top-full left-0 right-0 bg-zinc-900 border border-zinc-800 rounded-2xl mt-2 z-50 overflow-hidden shadow-2xl">
+                                        {filtrados.map(p => (
+                                            <button key={p.id} onClick={() => addAoCarrinho(p)} className="w-full p-4 hover:bg-white/5 flex justify-between items-center border-b border-zinc-800 last:border-0">
+                                                <div className="text-left flex items-center gap-2">
+                                                    <p className="font-bold text-sm uppercase">{p.nome}</p>
+                                                    {p.tamanho && <span className="bg-black text-maizena text-[8px] px-2 py-1 rounded-full font-black uppercase border border-maizena/30">{p.tamanho}</span>}
+                                                </div>
+                                                <div className="text-right flex items-center gap-4">
+                                                    <p className="text-[10px] text-zinc-500">Estoque: {p.estoque}</p>
+                                                    <p className="font-black text-maizena">R$ {parseFloat(p.valor).toFixed(2)}</p>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="bg-zinc-900 rounded-[32px] border border-zinc-800 overflow-hidden">
+                            <div className="p-6 border-b border-zinc-800 flex justify-between items-center"><h3 className="font-black italic uppercase text-sm">Itens da Venda</h3></div>
+                            <div className="max-h-[400px] overflow-y-auto">
+                                {carrinho.map((item, idx) => (
+                                    <div key={idx} className="p-4 flex justify-between items-center border-b border-zinc-800/50">
+                                        <div className="flex items-center gap-4">
+                                            <button onClick={() => setCarrinho(carrinho.filter((_, i) => i !== idx))} className="text-soft-red"><Icon name="x-circle" size={18}/></button>
+                                            <span className="font-bold text-xs uppercase flex items-center gap-2">
+                                                {item.nome}
+                                                {item.tamanho && <span className="bg-black text-zinc-400 text-[8px] px-2 py-1 rounded-full font-black uppercase">{item.tamanho}</span>}
+                                            </span>
+                                        </div>
+                                        <span className="font-black text-xs">R$ {parseFloat(item.valor).toFixed(2)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="space-y-6">
+                        <div className="bg-maizena p-8 rounded-[40px] text-black">
+                            <p className="font-black text-[10px] uppercase opacity-60 mb-1">Total</p>
+                            <h3 className="text-5xl font-black tracking-tighter">R$ {total.toFixed(2)}</h3>
+                        </div>
+                        <div className="bg-zinc-900 p-6 rounded-[32px] border border-zinc-800">
+                            <p className="text-[10px] text-zinc-400 mb-4 tracking-wide font-bold italic">
+                                DICA: Para usar duas formas de pagamento, clique na primeira, edite o valor dela para menos e depois clique na segunda forma!
+                            </p>
+                            <div className="grid grid-cols-2 gap-2 mb-6">
+                                {FORMAS_PAGAMENTO.map(f => (
+                                    <button key={f} onClick={() => addPagamento(f)} className="p-3 bg-black border border-zinc-800 rounded-xl text-[9px] font-black uppercase hover:border-maizena transition">{f}</button>
+                                ))}
+                            </div>
+                            {pagamentos.map((p, idx) => (
+                                <div key={idx} className="flex gap-2 items-center mb-2">
+                                    <div className="flex-1 bg-black p-3 rounded-xl border border-zinc-800 flex justify-between items-center">
+                                        <span className="text-[10px] font-black uppercase text-zinc-400">{p.forma}</span>
+                                        <input type="number" value={p.valor} onChange={e => { const n = [...pagamentos]; n[idx].valor = e.target.value; setPagamentos(n); }} className="bg-transparent text-right font-black text-maizena outline-none w-20" />
+                                    </div>
+                                    <button onClick={() => setPagamentos(pagamentos.filter((_, i) => i !== idx))} className="text-zinc-600 hover:text-soft-red transition"><Icon name="trash" size={16}/></button>
+                                </div>
+                            ))}
+                            <input placeholder="Cliente" value={cliente} onChange={e => setCliente(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white text-xs mb-4 mt-2 outline-none" />
+                            
+                            <button 
+                                disabled={total <= 0 || totalPago < total || !vendedorId} 
+                                onClick={processarFinalizacao} 
+                                className={`w-full py-5 rounded-2xl font-black transition mb-3 ${totalPago >= total && total > 0 && vendedorId ? 'bg-tech-green text-black hover:scale-105 shadow-lg' : 'bg-zinc-800 text-zinc-600 opacity-50 cursor-not-allowed'}`}
+                            >
+                                CONFIRMAR COMPRA
+                            </button>
+                            
+                            <button 
+                                disabled={total <= 0 || !vendedorId} 
+                                onClick={() => {
+                                    const vendedorObj = vendedorId === 'admin' ? { id: 'admin', nome: 'Administrador' } : funcionarios.find(f => f.id === vendedorId);
+                                    onReservar(carrinho, total, vendedorObj);
+                                }} 
+                                className={`w-full py-4 rounded-2xl font-black transition border-2 ${total > 0 && vendedorId ? 'border-maizena text-maizena hover:bg-maizena hover:text-black shadow-lg' : 'border-zinc-800 text-zinc-600 opacity-50 cursor-not-allowed'}`}
+                            >
+                                CRIAR RESERVA (PIX)
+                            </button>
+                            
+                            {!vendedorId && total > 0 && <p className="text-[9px] text-soft-orange font-black uppercase mt-3 text-center">Seleção de vendedor obrigatória para continuar</p>}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ResumoDiario = ({ vendas, config, user, onViewReserva }) => {
+            const [filtro, setFiltro] = useState(new Date().toLocaleDateString('en-CA'));
+            const [horaAtual, setHoraAtual] = useState(new Date().toLocaleTimeString('pt-BR'));
+
+            useEffect(() => {
+                const timer = setInterval(() => setHoraAtual(new Date().toLocaleTimeString('pt-BR')), 1000);
+                return () => clearInterval(timer);
+            }, []);
+
+            const dados = useMemo(() => {
+                const f = vendas.filter(v => 
+                    new Date(v.data).toLocaleDateString('pt-BR') === new Date(filtro + "T12:00:00").toLocaleDateString('pt-BR') 
+                    && !v.estornada
+                    && (user.role === 'admin' ? true : v.vendedorId === user.id)
+                );
+                const porForma = FORMAS_PAGAMENTO.reduce((acc, forma) => {
+                    acc[forma] = f.reduce((sum, v) => v.isMulti && !v.isReserva ? sum + (v.pagamentos?.find(p => p.forma === forma)?.valor || 0) : (v.pagamento === forma ? sum + v.valor : sum), 0);
+                    return acc;
+                }, {});
+                porForma["Pix Reserva"] = f.reduce((sum, v) => v.isReserva ? sum + v.valor : sum, 0);
+
+                return { lista: f, qtd: f.reduce((a, v) => a + (v.isMulti ? v.itens.length : 1), 0), total: f.reduce((a, v) => a + v.valor, 0), porForma };
+            }, [vendas, filtro, user]);
+
+            return (
+                <div className="max-w-5xl mx-auto">
+                    <div className="no-print">
+                        <div className="flex justify-between items-end mb-10">
+                            <div>
+                                <h2 className="text-4xl font-black italic uppercase tracking-tighter">Vendas {user.role !== 'admin' && 'Minhas'}</h2>
+                                <p className="text-maizena font-black text-xs uppercase mt-2">{new Date(filtro + "T12:00:00").toLocaleDateString('pt-BR')} • {horaAtual}</p>
+                            </div>
+                            <input type="date" value={filtro} onChange={e => setFiltro(e.target.value)} className="bg-zinc-900 border border-zinc-800 p-4 rounded-2xl text-white font-bold" />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                            <div className="bg-maizena p-10 rounded-[40px] text-black shadow-xl">
+                                <p className="font-black text-xs uppercase opacity-60">Peças Vendidas / Reservadas</p>
+                                <h3 className="text-7xl font-black">{dados.qtd}</h3>
+                            </div>
+                            <div className="bg-tech-green p-10 rounded-[40px] text-black shadow-xl">
+                                <p className="font-black text-xs uppercase opacity-60">Total Bruto</p>
+                                <h3 className="text-5xl font-black">R$ {dados.total.toFixed(2)}</h3>
+                            </div>
+                        </div>
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[40px] overflow-hidden">
+                            <table className="w-full text-left">
+                                <thead className="bg-black/50 text-[10px] font-black uppercase text-zinc-500">
+                                    <tr><th className="p-8">Roupa</th><th className="p-8">Cliente</th><th className="p-8">Vendedor</th><th className="p-8 text-right">Valor</th></tr>
+                                </thead>
+                                <tbody className="divide-y divide-zinc-800">
+                                    {dados.lista.map(v => (
+                                        <tr key={v.id} className="hover:bg-white/5 transition">
+                                            <td className="p-8 font-black uppercase text-sm">{v.nome}</td>
+                                            <td className="p-8 text-zinc-400 font-bold text-xs uppercase flex items-center gap-3">
+                                                {v.cliente}
+                                                {v.isReserva && (
+                                                    <button onClick={() => onViewReserva(v)} className="bg-maizena text-black px-3 py-1 rounded-lg text-[9px] font-black cursor-pointer hover:scale-105 transition shadow-lg">
+                                                        PIX / RESERVA
+                                                    </button>
+                                                )}
+                                            </td>
+                                            <td className="p-8 text-zinc-500 text-[10px] font-black uppercase">{v.vendedorNome}</td>
+                                            <td className="p-8 text-right font-black text-tech-green">R$ {parseFloat(v.valor).toFixed(2)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {dados.lista.length === 0 && <p className="text-center py-20 text-zinc-700 font-black uppercase">Nenhuma venda ou reserva registada para esta data.</p>}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModuloReservados = ({ vendas, onViewReserva, onToggleRetirado }) => {
+            const reservasAtivas = vendas.filter(v => v.isReserva && !v.estornada);
+
+            return (
+                <div className="max-w-5xl mx-auto space-y-6">
+                    <h2 className="text-3xl font-black italic uppercase text-white mb-8 tracking-tighter">Reservas Ativas</h2>
+                    <div className="grid gap-4">
+                        {reservasAtivas.map(v => (
+                            <div key={v.id} className={`p-6 rounded-[32px] flex flex-wrap gap-4 justify-between items-center shadow-lg transition-all border ${v.retirado ? 'bg-black border-tech-green/30 opacity-80' : 'bg-zinc-900 border-zinc-800'}`}>
+                                <div>
+                                    <div className="flex items-center gap-3">
+                                        <h3 className="font-black text-xl text-maizena uppercase">{v.cliente}</h3>
+                                        <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${v.retirado ? 'bg-tech-green text-black' : 'bg-soft-orange text-black'}`}>
+                                            {v.retirado ? 'RETIRADO' : 'NÃO RETIRADO'}
+                                        </span>
+                                    </div>
+                                    <p className="text-sm text-zinc-400 font-bold flex items-center gap-2 mt-1">
+                                        <Icon name="phone" size={14} /> {v.telefone || 'Não informado'}
+                                    </p>
+                                    <p className="text-[10px] text-zinc-500 uppercase mt-2 font-black">Data: {new Date(v.data).toLocaleString('pt-BR')}</p>
+                                    <p className="text-[10px] text-zinc-500 uppercase font-black">Itens: {v.nome}</p>
+                                </div>
+                                <div className="flex flex-col items-end gap-3">
+                                    <span className="font-black text-tech-green text-3xl">R$ {parseFloat(v.valor).toFixed(2)}</span>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => onToggleRetirado(v.id)} className={`px-4 py-3 rounded-2xl font-black text-[10px] uppercase transition flex items-center gap-2 ${v.retirado ? 'bg-zinc-800 text-white hover:bg-zinc-700' : 'bg-tech-green text-black hover:scale-105'}`}>
+                                            <Icon name={v.retirado ? "x-circle" : "check-circle"} size={16}/> 
+                                            {v.retirado ? 'DESFAZER RETIRADA' : 'MARCAR RETIRADO'}
+                                        </button>
+                                        <button onClick={() => onViewReserva(v)} className="bg-zinc-800 text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase hover:bg-maizena hover:text-black transition flex items-center gap-2">
+                                            <Icon name="eye" size={16}/> DETALHES
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                        {reservasAtivas.length === 0 && (
+                            <div className="text-center py-20">
+                                <Icon name="inbox" size={48} className="text-zinc-700 mx-auto mb-4"/>
+                                <p className="text-zinc-600 font-bold uppercase tracking-widest text-sm">Nenhuma reserva ativa no momento.</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalNovo = ({ onSave, onClose, produtoParaEditar = null }) => {
+            const [f, setF] = useState(produtoParaEditar || { nome: '', valor: '', estoque: '', imagem: '', tamanho: '', custo: '' });
+            const handleImg = (e) => {
+                const reader = new FileReader();
+                reader.onload = (ev) => setF({...f, imagem: ev.target.result});
+                reader.readAsDataURL(e.target.files[0]);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-2xl relative shadow-2xl">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                        
+                        <h2 className="text-3xl font-black mb-8 text-maizena italic uppercase">{produtoParaEditar ? 'Editar Produto' : 'Incluir Produto'}</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div className="space-y-4">
+                                <Input label="Nome do Produto" value={f.nome} onChange={v => setF({...f, nome: v})} />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <Input label="Preço de Venda" type="number" value={f.valor} onChange={v => setF({...f, valor: v})} />
+                                    <Input label="Valor de Custo (Opcional)" type="number" value={f.custo} onChange={v => setF({...f, custo: v})} />
+                                </div>
+                                <Input
+                                    label="Tamanho (P, M, G, 40, etc)"
+                                    value={f.tamanho || ''}
+                                    onChange={v => setF({...f, tamanho: v})}
+                                    inputClass="p-6 text-base rounded-3xl"
+                                />
+                                {!produtoParaEditar && <Input label="Estoque Inicial" type="number" value={f.estoque} onChange={v => setF({...f, estoque: parseInt(v)})} />}
+                            </div>
+                            <div className="border-2 border-dashed border-zinc-700 rounded-3xl flex flex-col items-center justify-center bg-black/40 overflow-hidden relative min-h-[250px]">
+                                {f.imagem ? <img src={f.imagem} className="absolute inset-0 w-full h-full object-cover" /> : (
+                                    <div className="text-center">
+                                        <Icon name="camera" className="text-zinc-600 mx-auto" size={40} />
+                                        <p className="text-[10px] font-black text-zinc-600 uppercase mt-2">Adicionar Foto</p>
+                                    </div>
+                                )}
+                                <input type="file" onChange={handleImg} className="absolute inset-0 opacity-0 cursor-pointer" />
+                            </div>
+                        </div>
+                        <div className="flex gap-4 mt-8">
+                            <button onClick={() => onSave(f)} className="flex-1 bg-tech-green text-black font-black py-5 rounded-2xl uppercase hover:scale-105 transition">SALVAR PRODUTO</button>
+                            <button onClick={onClose} className="px-8 text-zinc-500 font-bold uppercase hover:text-white transition">CANCELAR</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalVenda = ({ produto, onConfirm, onClose }) => {
+            const [c, setC] = useState('');
+            const [pagamentos, setPagamentos] = useState([]);
+            
+            const formasRapido = ["Dinheiro", "Pix", "Cartão de débito", "Cartão de crédito"];
+            
+            const total = parseFloat(produto.valor);
+            const totalPago = pagamentos.reduce((acc, p) => acc + parseFloat(p.valor || 0), 0);
+
+            const addPagamento = (forma) => {
+                const resto = total - totalPago;
+                if (resto <= 0) return;
+                setPagamentos([...pagamentos, { forma, valor: resto }]);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md relative shadow-2xl">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                        
+                        <h2 className="text-2xl font-black mb-6 uppercase text-maizena text-center italic">Compra Rápida</h2>
+                        
+                        <div className="bg-black/30 p-4 rounded-2xl border border-zinc-800 mb-6 flex justify-between items-center">
+                            <div>
+                                <p className="font-bold text-white flex items-center gap-2">
+                                    {produto.nome}
+                                    {produto.tamanho && <span className="bg-zinc-800 text-maizena text-[10px] px-2 py-1 rounded-full">{produto.tamanho}</span>}
+                                </p>
+                            </div>
+                            <p className="font-black text-maizena text-xl">R$ {total.toFixed(2)}</p>
+                        </div>
+                        
+                        <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-2">
+                            <Input label="Nome do Cliente" value={c} onChange={v => setC(v)} />
+                            
+                            <div className="mt-4">
+                                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2 ml-1">Formas de Pagamento</label>
+                                <p className="text-[9px] text-zinc-400 mb-3 italic">
+                                    Para dividir, clique na primeira forma, altere o valor, e clique na segunda.
+                                </p>
+                                <div className="grid grid-cols-2 gap-2 mb-4">
+                                    {formasRapido.map(forma => (
+                                        <button 
+                                            key={forma} 
+                                            onClick={() => addPagamento(forma)} 
+                                            className="p-3 rounded-xl text-[9px] font-black border bg-black text-zinc-500 border-zinc-800 hover:border-maizena transition"
+                                        >
+                                            {forma.includes('Pix') ? '⚡ ' + forma.toUpperCase() : forma.toUpperCase()}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {pagamentos.map((p, idx) => (
+                                    <div key={idx} className="flex gap-2 items-center mb-2">
+                                        <div className="flex-1 bg-black p-3 rounded-xl border border-zinc-800 flex justify-between items-center">
+                                            <span className="text-[10px] font-black uppercase text-zinc-400">{p.forma}</span>
+                                            <input 
+                                                type="number" 
+                                                value={p.valor} 
+                                                onChange={e => { 
+                                                    const n = [...pagamentos]; 
+                                                    n[idx].valor = e.target.value; 
+                                                    setPagamentos(n); 
+                                                }} 
+                                                className="bg-transparent text-right font-black text-maizena outline-none w-20" 
+                                            />
+                                        </div>
+                                        <button onClick={() => setPagamentos(pagamentos.filter((_, i) => i !== idx))} className="text-zinc-600 hover:text-soft-red transition"><Icon name="trash" size={16}/></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2 mt-6">
+                            <button 
+                                disabled={totalPago < total || total === 0} 
+                                onClick={() => onConfirm(produto.id, c, pagamentos)} 
+                                className={`w-full py-5 rounded-2xl font-black transition ${totalPago >= total ? 'bg-tech-green text-black hover:scale-105 shadow-lg' : 'bg-zinc-800 text-zinc-600'}`}
+                            >
+                                CONFIRMAR COMPRA
+                            </button>
+                            <button onClick={onClose} className="w-full py-3 text-zinc-500 font-bold uppercase hover:text-white transition">CANCELAR</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalReserva = ({ onConfirm, onClose }) => {
+            const [nome, setNome] = useState('');
+            const [telefone, setTelefone] = useState('');
+            const [comprovante, setComprovante] = useState(null);
+
+            const handleFile = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (ev) => setComprovante(ev.target.result);
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                        
+                        <h2 className="text-2xl font-black mb-6 uppercase text-maizena text-center italic">Criar Reserva</h2>
+                        
+                        <div className="space-y-4">
+                            <Input label="Nome do Cliente *" value={nome} onChange={setNome} />
+                            <Input label="Telefone / WhatsApp *" value={telefone} onChange={setTelefone} />
+                            
+                            <div className="mt-4">
+                                <label className="text-[10px] font-black text-zinc-500 uppercase">Comprovante PIX (Imagem) *</label>
+                                <input 
+                                    type="file" 
+                                    accept="image/*" 
+                                    onChange={handleFile} 
+                                    className="block mt-2 w-full text-xs text-zinc-500 file:mr-4 file:py-3 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-zinc-800 file:text-white hover:file:bg-zinc-700 cursor-pointer" 
+                                />
+                                {comprovante && <img src={comprovante} className="mt-4 w-full h-40 object-cover rounded-2xl border border-zinc-800" />}
+                            </div>
+                        </div>
+                        
+                        <div className="flex flex-col gap-2 mt-8">
+                            <button 
+                                disabled={!nome || !telefone || !comprovante} 
+                                onClick={() => onConfirm(nome, telefone, comprovante)} 
+                                className={`w-full py-5 rounded-2xl font-black transition ${nome && telefone && comprovante ? 'bg-maizena text-black hover:scale-105' : 'bg-zinc-800 text-zinc-600'}`}
+                            >
+                                CONFIRMAR RESERVA
+                            </button>
+                            <button onClick={onClose} className="w-full py-3 text-zinc-500 font-bold uppercase hover:text-white transition">CANCELAR</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalVerReserva = ({ venda, onClose }) => (
+            <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl relative max-h-[90vh] flex flex-col">
+                    <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                    <h2 className="text-2xl font-black mb-6 text-maizena italic uppercase tracking-tight">Detalhes da Reserva</h2>
+                    
+                    <div className="overflow-y-auto pr-2 pb-4 flex-1">
+                        <div className="bg-black/50 p-6 rounded-3xl border border-zinc-800 mb-6 space-y-2">
+                            <p className="text-[10px] text-zinc-500 font-black uppercase">Cliente</p>
+                            <p className="font-bold text-white text-lg">{venda.cliente}</p>
+                            
+                            <p className="text-[10px] text-zinc-500 font-black uppercase mt-4">Telefone</p>
+                            <p className="font-bold text-white">{venda.telefone || 'Não informado'}</p>
+                            
+                            <p className="text-[10px] text-zinc-500 font-black uppercase mt-4">Valor Total da Reserva</p>
+                            <p className="font-black text-tech-green text-2xl">R$ {venda.valor.toFixed(2)}</p>
+                            
+                            <p className="text-[10px] text-zinc-500 font-black uppercase mt-4">Status da Retirada</p>
+                            <p className={`font-black uppercase text-sm ${venda.retirado ? 'text-tech-green' : 'text-soft-orange'}`}>
+                                {venda.retirado ? 'RETIRADO' : 'NÃO RETIRADO'}
+                            </p>
+                        </div>
+
+                        {venda.comprovantePix && (
+                            <div>
+                                <p className="text-[10px] font-black text-zinc-500 uppercase mb-3">Comprovante PIX</p>
+                                <img src={venda.comprovantePix} className="w-full rounded-3xl border border-zinc-800 shadow-xl" />
+                            </div>
+                        )}
+                    </div>
+
+                    <button onClick={onClose} className="w-full mt-4 bg-zinc-800 text-white py-5 rounded-2xl font-black uppercase hover:bg-zinc-700 transition">FECHAR</button>
+                </div>
+            </div>
+        );
+
+        const ModalCupom = ({ venda, config, onClose }) => (
+            <div className="fixed inset-0 bg-black/98 z-50 flex items-center justify-center p-4">
+                <div className="bg-white p-8 w-[350px] text-black shadow-2xl relative" id="receipt-print">
+                    <div className="text-center border-b-2 border-dashed border-gray-300 pb-6 mb-4">
+                        <h2 className="font-black text-2xl tracking-tighter italic uppercase">{config.nome}</h2>
+                        <p className="text-[10px] font-bold text-gray-400">{venda.isReserva ? 'CUPOM DE RESERVA' : 'Cupom Não Fiscal'}</p>
+                    </div>
+                    <div className="text-[10px] space-y-1 mb-4">
+                        <div className="flex justify-between"><span>DATA:</span><span className="font-bold">{new Date().toLocaleString('pt-BR')}</span></div>
+                        <div className="flex justify-between"><span>VENDEDOR:</span><span className="font-bold uppercase">{venda.vendedorNome}</span></div>
+                        <div className="flex justify-between"><span>CLIENTE:</span><span className="font-bold uppercase">{venda.cliente}</span></div>
+                        {venda.telefone && <div className="flex justify-between"><span>TELEFONE:</span><span className="font-bold uppercase">{venda.telefone}</span></div>}
+                    </div>
+                    <div className="border-t border-b py-2 mb-4">
+                        {venda.isMulti ? venda.itens.map((i,idx) => <div key={idx} className="flex justify-between text-xs"><span>{i.nome}</span><span>R$ {parseFloat(i.valor).toFixed(2)}</span></div>) : <div className="flex justify-between text-xs"><span>{venda.nome}</span><span>R$ {venda.valor.toFixed(2)}</span></div>}
+                    </div>
+                    <div className="flex justify-between text-xl font-black mb-4"><span>TOTAL</span><span>R$ {venda.valor.toFixed(2)}</span></div>
+                    
+                    <div className="border-t border-dashed border-gray-300 pt-4 mb-4">
+                        <p className="text-[10px] font-bold text-gray-400 mb-2 uppercase">Forma(s) de Pagamento</p>
+                        {venda.pagamentos && venda.pagamentos.length > 0 ? (
+                            venda.pagamentos.map((p, idx) => (
+                                <div key={idx} className="flex justify-between text-xs font-bold">
+                                    <span className="uppercase">{p.forma}</span>
+                                    <span>R$ {parseFloat(p.valor).toFixed(2)}</span>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="flex justify-between text-xs font-bold">
+                                <span className="uppercase">{venda.pagamento}</span>
+                                <span>R$ {venda.valor.toFixed(2)}</span>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="no-print mt-8 space-y-2">
+                        <button onClick={() => window.print()} className="w-full bg-black text-white py-4 rounded-xl font-black">IMPRIMIR</button>
+                        <button onClick={onClose} className="w-full text-zinc-400 py-2">FECHAR</button>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ModalConfig = ({ config, onSave, onClose }) => {
+            const [f, setF] = useState(config);
+            const handleLogo = (e) => {
+                const reader = new FileReader();
+                reader.onload = (ev) => setF({...f, logo: ev.target.result});
+                reader.readAsDataURL(e.target.files[0]);
+            };
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                        <h2 className="text-2xl font-black mb-8 text-maizena italic uppercase">Sistema</h2>
+                        <Input label="Nome da Loja" value={f.nome} onChange={v => setF({...f, nome: v})} />
+                        <div className="mt-4">
+                            <label className="text-[10px] font-black text-zinc-500 uppercase">Logo</label>
+                            <input type="file" onChange={handleLogo} className="block mt-2 text-xs text-zinc-500" />
+                        </div>
+                        <button onClick={() => { onSave(f); onClose(); }} className="w-full bg-tech-green text-black font-black py-4 rounded-2xl mt-8">SALVAR</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalIncluir = ({ produto, onConfirm, onClose }) => {
+            const [q, setQ] = useState(1);
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-sm text-center relative">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                        <h2 className="text-xl font-black text-zinc-400 mb-6 uppercase tracking-widest">REPOR ESTOQUE</h2>
+                        <p className="text-maizena font-black text-xs uppercase mb-2">{produto.nome}</p>
+                        <input type="number" value={q} onChange={e => setQ(e.target.value)} className="w-full bg-black text-maizena text-5xl font-black text-center p-6 rounded-3xl mb-8 border border-zinc-800 outline-none" />
+                        <div className="flex flex-col gap-2">
+                            <button onClick={() => onConfirm(produto.id, q)} className="w-full bg-tech-green text-black font-black py-5 rounded-2xl uppercase transition hover:scale-105">ADICIONAR</button>
+                            <button onClick={onClose} className="py-2 text-zinc-500 font-bold uppercase">CANCELAR</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        
+
+        const ModalAlterarEstoque = ({ produto, onConfirm, onClose }) => {
+            const [modo, setModo] = useState('definir'); // 'definir' | 'ajustar'
+            const [novo, setNovo] = useState(parseInt(produto?.estoque || 0));
+            const [ajuste, setAjuste] = useState(0);
+
+            const calcular = () => {
+                const base = parseInt(produto?.estoque || 0);
+                if (modo === 'definir') return parseInt(novo || 0);
+                return base + parseInt(ajuste || 0);
+            };
+
+            const valorFinal = calcular();
+
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+
+                        <h2 className="text-2xl font-black mb-2 text-maizena italic uppercase">Alterar Estoque</h2>
+                        <p className="text-[10px] text-zinc-500 uppercase font-bold mb-6">
+                            {produto?.nome?.toUpperCase()} • ATUAL: <span className="text-white">{parseInt(produto?.estoque || 0)}</span>
+                        </p>
+
+                        <div className="flex bg-black/40 border border-zinc-800 rounded-2xl p-1 mb-6">
+                            <button
+                                onClick={() => setModo('definir')}
+                                className={`flex-1 py-3 rounded-xl font-black text-[10px] uppercase transition ${modo === 'definir' ? 'bg-maizena text-black' : 'text-zinc-400'}`}
+                            >
+                                Definir valor
+                            </button>
+                            <button
+                                onClick={() => setModo('ajustar')}
+                                className={`flex-1 py-3 rounded-xl font-black text-[10px] uppercase transition ${modo === 'ajustar' ? 'bg-maizena text-black' : 'text-zinc-400'}`}
+                            >
+                                Ajustar (+ / -)
+                            </button>
+                        </div>
+
+                        {modo === 'definir' ? (
+                            <div className="space-y-3">
+                                <label className="text-[10px] font-black text-zinc-500 uppercase block ml-1">Novo estoque</label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    value={novo}
+                                    onChange={e => setNovo(e.target.value)}
+                                    className="w-full bg-black border border-zinc-800 p-5 rounded-2xl text-white font-black outline-none focus:border-maizena"
+                                />
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                <label className="text-[10px] font-black text-zinc-500 uppercase block ml-1">Ajuste (pode ser negativo)</label>
+                                <input
+                                    type="number"
+                                    value={ajuste}
+                                    onChange={e => setAjuste(e.target.value)}
+                                    className="w-full bg-black border border-zinc-800 p-5 rounded-2xl text-white font-black outline-none focus:border-maizena"
+                                />
+                                <p className="text-[10px] text-zinc-500 font-bold uppercase">
+                                    Resultado: <span className={valorFinal < 0 ? "text-soft-red" : "text-white"}>{valorFinal}</span>
+                                </p>
+                            </div>
+                        )}
+
+                        <div className="flex gap-3 mt-8">
+                            <button
+                                onClick={() => onConfirm(produto.id, valorFinal)}
+                                className="flex-1 bg-tech-green text-black font-black py-5 rounded-2xl uppercase transition hover:scale-105"
+                            >
+                                SALVAR
+                            </button>
+                            <button onClick={onClose} className="py-2 text-zinc-500 font-bold uppercase">CANCELAR</button>
+                        </div>
+
+                        {valorFinal < 0 && (
+                            <p className="text-[10px] text-soft-red font-black uppercase mt-4 text-center">
+                                O estoque final não pode ser negativo.
+                            </p>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+const ModalListaEstorno = ({ produto, vendas, onConfirm, onClose }) => (
+            <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-2xl max-h-[80vh] flex flex-col relative">
+                    <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                    <h2 className="text-2xl font-black mb-6 italic uppercase text-maizena">HISTÓRICO: {produto.nome}</h2>
+                    <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+                        {vendas.map(v => (
+                            <div key={v.id} className="bg-black border border-zinc-800 p-4 rounded-2xl flex justify-between items-center">
+                                <div>
+                                    <p className="font-black text-white uppercase">{v.cliente}</p>
+                                    <p className="text-[10px] text-zinc-500">{new Date(v.data).toLocaleString('pt-BR')}</p>
+                                </div>
+                                <button onClick={() => onConfirm(v.id)} className="bg-soft-orange text-black px-4 py-2 rounded-xl font-black text-xs uppercase hover:bg-white transition">Estornar</button>
+                            </div>
+                        ))}
+                        {vendas.length === 0 && <p className="text-center py-10 text-zinc-600 font-bold uppercase italic">Nenhuma venda ativa para estorno.</p>}
+                    </div>
+                    <button onClick={onClose} className="mt-6 py-4 bg-zinc-800 text-white rounded-2xl font-black uppercase">FECHAR</button>
+                </div>
+            </div>
+        );
+
+        const Input = ({ label, type="text", value, onChange, placeholder, inputClass = "" }) => (
+            <div>
+                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2 ml-1">{label}</label>
+                <input
+                    type={type}
+                    value={value}
+                    onChange={e => onChange(e.target.value)}
+                    placeholder={placeholder}
+                    className={`w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none focus:border-maizena ${inputClass}`}
+                />
+            </div>
+        );
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
