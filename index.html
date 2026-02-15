@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Sistema Maizena | Mobile</title>
+    <title>Sistema de Gestão | Visual Inventory Pro</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -13,19 +13,43 @@
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
+    
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #111111; color: #ffffff; -webkit-tap-highlight-color: transparent; }
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #111111; 
+            color: #ffffff;
+            -webkit-tap-highlight-color: transparent;
+        }
         .bg-maizena { background-color: #F2C94C; }
         .text-maizena { color: #F2C94C; }
         .border-maizena { border-color: #F2C94C; }
-        .product-card { height: 320px; }
-        @media (min-width: 640px) { .product-card { height: 480px; } }
+        .bg-tech-green { background-color: #1DB954; }
+        .bg-soft-red { background-color: #E63946; }
+        .bg-soft-orange { background-color: #F4A261; }
+        
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #111111; }
+        ::-webkit-scrollbar-thumb { background: #333333; border-radius: 10px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+
+        @media print {
+            body * { visibility: hidden; }
+            #receipt-print, #receipt-print *, #print-summary, #print-summary *, #print-meta, #print-meta * { visibility: visible; }
+            #receipt-print, #print-summary, #print-meta { 
+                position: absolute; left: 0; top: 0; width: 100%; color: black !important; background: white !important; padding: 20px;
+            }
+            .no-print { display: none !important; }
+        }
     </style>
 </head>
 <body>
     <div id="root"></div>
+
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const FORMAS_PAGAMENTO = ["Dinheiro", "Pix", "Cartão de débito", "Cartão de crédito"];
         const SENHA_ADM_PADRAO = "332133";
 
         const Icon = ({ name, size = 20, className = "" }) => {
@@ -40,142 +64,637 @@
 
             const [produtos, setProdutos] = useState(JSON.parse(localStorage.getItem('maizena_produtos')) || []);
             const [vendas, setVendas] = useState(JSON.parse(localStorage.getItem('maizena_vendas')) || []);
-            const [funcionarios, setFuncionarios] = useState(JSON.parse(localStorage.getItem('maizena_funcs')) || []);
             const [config, setConfig] = useState(JSON.parse(localStorage.getItem('maizena_config')) || { nome: 'MAIZENA CATALOG', logo: '' });
-            const [userLogado, setUserLogado] = useState(JSON.parse(localStorage.getItem('maizena_sessao')) || null);
-            const [abaAtiva, setAbaAtiva] = useState('catalogo');
             const [modal, setModal] = useState({ type: null, data: null });
-            
+            const [abaAtiva, setAbaAtiva] = useState('catalogo');
+            const [funcionarios, setFuncionarios] = useState(JSON.parse(localStorage.getItem('maizena_funcs')) || []);
+            const [userLogado, setUserLogado] = useState(JSON.parse(localStorage.getItem('maizena_sessao')) || null);
+            const [dbSizePct, setDbSizePct] = useState(0);
+
+            // Estado Global do Carrinho de Compras
+            const [carrinhoGlobal, setCarrinhoGlobal] = useState([]);
+
             const syncReadyRef = useRef(false);
             const syncTimerRef = useRef(null);
 
-            // PASSO A PASSO: 1. Carregar do Banco de Dados
             useEffect(() => {
+                if (!supabase) return;
                 (async () => {
-                    const { data, error } = await supabase.from('app_data').select('*').eq('id', 'main').maybeSingle();
-                    if (data) {
-                        if (data.produtos) setProdutos(data.produtos);
-                        if (data.vendas) setVendas(data.vendas);
-                        if (data.config) setConfig(data.config);
-                        if (data.funcionarios) setFuncionarios(data.funcionarios);
+                    const { data, error } = await supabase.from('app_data').select('produtos,vendas,config,funcionarios').eq('id', 'main').maybeSingle();
+                    if (!data) {
+                        const payload = { id: 'main', produtos: produtos || [], vendas: vendas || [], config: config || { nome: 'MAIZENA CATALOG', logo: '' }, funcionarios: funcionarios || [] };
+                        await supabase.from('app_data').insert([payload]);
+                    } else {
+                        setProdutos(Array.isArray(data.produtos) ? data.produtos : []);
+                        setVendas(Array.isArray(data.vendas) ? data.vendas : []);
+                        setConfig(data.config || { nome: 'MAIZENA CATALOG', logo: '' });
+                        setFuncionarios(Array.isArray(data.funcionarios) ? data.funcionarios : []);
                     }
                     syncReadyRef.current = true;
                 })();
             }, []);
 
-            // PASSO A PASSO: 2. Salvar no Banco de Dados sempre que algo mudar
             useEffect(() => {
                 localStorage.setItem('maizena_produtos', JSON.stringify(produtos));
                 localStorage.setItem('maizena_vendas', JSON.stringify(vendas));
-                localStorage.setItem('maizena_funcs', JSON.stringify(funcionarios));
                 localStorage.setItem('maizena_config', JSON.stringify(config));
+                localStorage.setItem('maizena_funcs', JSON.stringify(funcionarios));
                 localStorage.setItem('maizena_sessao', JSON.stringify(userLogado));
+                
+                try {
+                    const dataString = JSON.stringify({ produtos, vendas, funcionarios, config });
+                    const bytes = new TextEncoder().encode(dataString).length;
+                    const pct = Math.min((bytes / (5 * 1024 * 1024)) * 100, 100).toFixed(1);
+                    setDbSizePct(pct);
+                } catch (e) { setDbSizePct(0); }
 
                 if (!syncReadyRef.current) return;
-
                 if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
                 syncTimerRef.current = setTimeout(async () => {
-                    await supabase.from('app_data').upsert([{ 
-                        id: 'main', 
-                        produtos, 
-                        vendas, 
-                        config, 
-                        funcionarios 
-                    }]);
-                }, 1000);
-            }, [produtos, vendas, funcionarios, config, userLogado]);
+                    await supabase.from('app_data').upsert([{ id: 'main', produtos, vendas, config, funcionarios }], { onConflict: 'id' });
+                }, 800);
+            }, [produtos, vendas, config, funcionarios, userLogado]);
 
-            if (!userLogado) return (
+            const handleLogin = (id, senha) => {
+                if (id === 'admin' && senha === SENHA_ADM_PADRAO) {
+                    setUserLogado({ id: 'admin', nome: 'Administrador', role: 'admin' });
+                    setAbaAtiva('catalogo'); return true;
+                }
+                const f = funcionarios.find(u => u.id === id && u.senha === senha);
+                if (f) {
+                    setUserLogado({ ...f, role: 'user' });
+                    if (f.permissoes?.catalogo) setAbaAtiva('catalogo');
+                    else if (f.permissoes?.caixa) setAbaAtiva('caixa');
+                    else setAbaAtiva('resumo');
+                    return true;
+                }
+                alert("Credenciais incorretas"); return false;
+            };
+
+            const logout = () => { setUserLogado(null); setAbaAtiva('catalogo'); setCarrinhoGlobal([]); };
+
+            const temAcesso = (modulo) => {
+                if (!userLogado) return false;
+                if (userLogado.role === 'admin') return true;
+                if (modulo === 'reservados' && userLogado.permissoes?.reservados === undefined) return true;
+                return userLogado.permissoes?.[modulo];
+            };
+
+            const handleFinalizarCaixa = (itensCarrinho, cliente, pagamentosMultiplos, total, vendedor) => {
+                const novaVendaMaster = {
+                    id: `V-CX-${Date.now()}`, itens: itensCarrinho, cliente: cliente || "Consumidor",
+                    pagamentos: pagamentosMultiplos, total: total, data: new Date().toISOString(), isMulti: true,
+                    nome: itensCarrinho.map(i => i.nome).join(", "), valor: total, pagamento: pagamentosMultiplos.map(p => p.forma).join(" + "),
+                    vendedorId: vendedor.id, vendedorNome: vendedor.nome
+                };
+
+                let novosProdutos = [...produtos];
+                itensCarrinho.forEach(item => { novosProdutos = novosProdutos.map(p => p.id === item.id ? { ...p, estoque: p.estoque - 1 } : p); });
+                setProdutos(novosProdutos); 
+                setVendas([...vendas, novaVendaMaster]); 
+                setCarrinhoGlobal([]); // Limpa o carrinho global após a venda
+                setModal({ type: 'cupom', data: novaVendaMaster });
+            };
+
+            const handleFinalizarReserva = (nome, telefone, comprovante) => {
+                const { carrinho, total, vendedor } = modal.data;
+                const novaVendaMaster = {
+                    id: `R-CX-${Date.now()}`, itens: carrinho, cliente: nome || "Consumidor", telefone: telefone, comprovantePix: comprovante,
+                    pagamentos: [{ forma: 'Pix Reserva', valor: total }], total: total, data: new Date().toISOString(),
+                    isMulti: true, isReserva: true, retirado: false, nome: carrinho.map(i => i.nome).join(", "),
+                    valor: total, pagamento: "Pix Reserva", vendedorId: vendedor.id, vendedorNome: vendedor.nome
+                };
+
+                let novosProdutos = [...produtos];
+                carrinho.forEach(item => { novosProdutos = novosProdutos.map(p => p.id === item.id ? { ...p, estoque: p.estoque - 1 } : p); });
+                setProdutos(novosProdutos); 
+                setVendas([...vendas, novaVendaMaster]); 
+                setCarrinhoGlobal([]); // Limpa o carrinho global após reserva
+                setModal({ type: 'cupom', data: novaVendaMaster });
+            };
+
+            const handleToggleRetirado = (id) => setVendas(vendas.map(v => v.id === id ? { ...v, retirado: !v.retirado } : v));
+
+            const saveFuncionario = (f) => {
+                if (f.id) setFuncionarios(funcionarios.map(item => item.id === f.id ? f : item));
+                else setFuncionarios([...funcionarios, { ...f, id: 'F-' + Date.now() }]);
+                setModal({ type: null });
+            };
+
+            if (!userLogado) return <TelaLogin onLogin={handleLogin} funcionarios={funcionarios} />;
+
+            return (
+                <div className="max-w-[1400px] mx-auto min-h-screen border-x border-zinc-800 flex flex-col relative pb-24">
+                    <header className="p-4 sm:p-6 flex flex-col sm:flex-row gap-4 justify-between sm:items-center border-b border-zinc-800 bg-[#111111] sticky top-0 z-40">
+                        <div className="flex items-center justify-between w-full sm:w-auto">
+                            <div className="flex items-center gap-3">
+                                {config.logo && <img src={config.logo} className="h-10 w-10 sm:h-12 sm:w-12 object-contain rounded-lg" />}
+                                <div>
+                                    <h1 className="text-xl sm:text-2xl font-black tracking-tighter text-maizena italic uppercase">{config.nome}</h1>
+                                    <p className="text-[9px] sm:text-[10px] text-zinc-500 uppercase tracking-widest font-bold">{userLogado.nome} • {userLogado.role}</p>
+                                </div>
+                            </div>
+                            {temAcesso('configuracoes') && (
+                                <button onClick={() => setModal({type: 'novo'})} className="sm:hidden bg-tech-green text-black px-4 py-2 rounded-xl font-black text-xs flex items-center gap-1 shadow-lg">
+                                    <Icon name="plus" size={16}/> ITEM
+                                </button>
+                            )}
+                        </div>
+                        
+                        <div className="flex bg-zinc-900 p-1.5 rounded-2xl border border-zinc-800 w-full sm:w-auto overflow-x-auto no-scrollbar gap-1 flex-nowrap items-center">
+                            {temAcesso('catalogo') && <button onClick={() => setAbaAtiva('catalogo')} className={`px-4 py-2 rounded-xl font-bold whitespace-nowrap transition text-[10px] sm:text-xs ${abaAtiva === 'catalogo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Loja</button>}
+                            {temAcesso('caixa') && <button onClick={() => setAbaAtiva('caixa')} className={`px-4 py-2 rounded-xl font-bold whitespace-nowrap transition text-[10px] sm:text-xs ${abaAtiva === 'caixa' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Caixa</button>}
+                            {temAcesso('reservados') && <button onClick={() => setAbaAtiva('reservados')} className={`px-4 py-2 rounded-xl font-bold whitespace-nowrap transition text-[10px] sm:text-xs ${abaAtiva === 'reservados' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Reservas</button>}
+                            {userLogado.role === 'admin' && <button onClick={() => setAbaAtiva('admin')} className={`px-4 py-2 rounded-xl font-bold whitespace-nowrap transition text-[10px] sm:text-xs ${abaAtiva === 'admin' ? 'bg-white text-black' : 'text-zinc-500'}`}>ADM</button>}
+                            <button onClick={logout} className="px-3 py-2 text-soft-red ml-auto"><Icon name="log-out" size={16}/></button>
+                        </div>
+
+                        {temAcesso('configuracoes') && (
+                            <button onClick={() => setModal({type: 'novo'})} className="hidden sm:flex bg-tech-green text-black px-6 py-3 rounded-2xl font-black text-sm items-center gap-2 hover:scale-105 transition">
+                                <Icon name="plus" size={18}/> INCLUIR PRODUTO
+                            </button>
+                        )}
+                    </header>
+
+                    <main className="p-4 sm:p-6 flex-1">
+                        {abaAtiva === 'catalogo' && (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 sm:gap-4">
+                                {produtos.map(p => (
+                                    <ProductCard 
+                                        key={p.id} produto={p} podeEditar={temAcesso('configuracoes')}
+                                        onAddCarrinho={() => {
+                                            if(p.estoque <= 0) return alert("Produto esgotado no estoque!");
+                                            setCarrinhoGlobal([...carrinhoGlobal, p]);
+                                        }} 
+                                        onIncluir={() => setModal({type: 'incluir', data: p})}
+                                        onEstorno={() => setModal({type: 'estorno_lista', data: p})} 
+                                        onEdit={() => setModal({type: 'editar', data: p})}
+                                        onDelete={() => { if(confirm("Deseja remover este produto?")) setProdutos(produtos.filter(item => item.id !== p.id)) }}
+                                    />
+                                ))}
+                                {produtos.length === 0 && <div className="col-span-full py-20 text-center text-zinc-600 font-bold uppercase text-sm">Catálogo Vazio</div>}
+                            </div>
+                        )}
+                        {abaAtiva === 'caixa' && <ModuloCaixa produtos={produtos} funcionarios={funcionarios} onFinalizar={handleFinalizarCaixa} onReservar={(carrinho, total, vendedor) => setModal({type: 'reserva', data: {carrinho, total, vendedor}})} carrinho={carrinhoGlobal} setCarrinho={setCarrinhoGlobal} />}
+                        {abaAtiva === 'resumo' && <ResumoDiario vendas={vendas} config={config} user={userLogado} onViewReserva={(v) => setModal({type: 'ver_reserva', data: v})} />}
+                        {abaAtiva === 'reservados' && <ModuloReservados vendas={vendas} onViewReserva={(v) => setModal({type: 'ver_reserva', data: v})} onToggleRetirado={handleToggleRetirado} />}
+                        {abaAtiva === 'metas' && <ModuloMetas user={userLogado} vendas={vendas} funcionarios={funcionarios} />}
+                        {abaAtiva === 'admin' && <ModuloADM funcionarios={funcionarios} setFuncionarios={setFuncionarios} onEditFunc={(f) => setModal({type: 'editFunc', data: f})} onAddFunc={() => setModal({type: 'editFunc', data: null})} onConfig={() => setModal({type: 'config'})} setAbaAtiva={setAbaAtiva} dbSizePct={dbSizePct} onResetData={(tipo) => {
+                            if (tipo === 'vendas' && confirm("Apagar histórico de vendas?")) setVendas([]);
+                            if (tipo === 'tudo' && confirm("Zerar tudo?") && prompt("Digite APAGAR") === 'APAGAR') { setProdutos([]); setVendas([]); setFuncionarios([]); logout(); }
+                        }} />}
+                    </main>
+
+                    {/* BARRA FLUTUANTE DO CARRINHO GLOBAL */}
+                    {carrinhoGlobal.length > 0 && abaAtiva === 'catalogo' && (
+                        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-sm bg-tech-green text-black p-4 rounded-3xl shadow-[0_20px_50px_rgba(29,185,84,0.3)] flex justify-between items-center z-50 animate-in slide-in-from-bottom-10 border border-[#18a049]">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-black text-tech-green w-10 h-10 rounded-full flex items-center justify-center font-black text-sm">
+                                    {carrinhoGlobal.length}
+                                </div>
+                                <div>
+                                    <p className="font-black text-[10px] uppercase leading-none opacity-80">No Caixa</p>
+                                    <p className="font-black text-lg leading-none mt-1">R$ {carrinhoGlobal.reduce((acc, i) => acc + parseFloat(i.valor), 0).toFixed(2)}</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setAbaAtiva('caixa')} className="bg-black text-white px-5 py-3 rounded-2xl font-black text-[10px] uppercase flex items-center gap-2 hover:bg-zinc-900 transition active:scale-95">
+                                IR PAGAR <Icon name="arrow-right" size={14}/>
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Modais */}
+                    {modal.type === 'novo' && <ModalNovo onSave={(n) => { setProdutos([...produtos, {...n, id: Date.now()}]); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'editar' && <ModalNovo onSave={(e) => { setProdutos(produtos.map(p => p.id === e.id ? e : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} produtoParaEditar={modal.data} />}
+                    {modal.type === 'incluir' && <ModalIncluir produto={modal.data} onConfirm={(id, q) => { setProdutos(produtos.map(p => p.id === id ? {...p, estoque: p.estoque + parseInt(q)} : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'cupom' && <ModalCupom venda={modal.data} config={config} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'config' && <ModalConfig config={config} onSave={setConfig} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'reserva' && <ModalReserva onConfirm={handleFinalizarReserva} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'ver_reserva' && <ModalVerReserva venda={modal.data} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'estorno_lista' && <ModalListaEstorno produto={modal.data} vendas={vendas.filter(v => (v.isMulti ? v.itens.some(i => i.id === modal.data.id) : v.produtoId === modal.data.id) && !v.estornada)} onConfirm={(vid) => {
+                        const v = vendas.find(x => x.id === vid);
+                        setVendas(vendas.map(x => x.id === vid ? {...x, estornada: true} : x));
+                        let nProd = [...produtos];
+                        if(v.isMulti) v.itens.forEach(i => nProd = nProd.map(p => p.id === i.id ? {...p, estoque: p.estoque + 1} : p));
+                        else nProd = nProd.map(p => p.id === v.produtoId ? {...p, estoque: p.estoque + 1} : p);
+                        setProdutos(nProd); setModal({type: null});
+                    }} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'editFunc' && <ModalFuncionario funcionario={modal.data} onSave={saveFuncionario} onClose={() => setModal({type: null})} />}
+                </div>
+            );
+        };
+
+        const TelaLogin = ({ onLogin, funcionarios }) => {
+            const [id, setId] = useState(''); const [senha, setSenha] = useState('');
+            return (
                 <div className="min-h-screen flex items-center justify-center bg-black p-4">
-                    <div className="bg-zinc-900 p-8 rounded-[40px] w-full max-w-md border border-zinc-800">
-                        <h2 className="text-maizena font-black text-3xl text-center mb-10 uppercase italic">Login</h2>
+                    <div className="bg-zinc-900 p-8 rounded-[40px] w-full max-w-md border border-zinc-800 shadow-2xl">
+                        <div className="text-center mb-8 flex flex-col items-center">
+                            <h2 className="text-maizena font-black text-4xl italic uppercase">Login</h2>
+                        </div>
                         <div className="space-y-4">
-                            <select className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none" onChange={(e) => setModal({type: 'login-id', data: e.target.value})}>
-                                <option value="">Selecione Usuário</option>
-                                <option value="admin">Administrador</option>
-                                {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
-                            </select>
-                            <input type="password" placeholder="Senha" className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none" id="pass-input" />
-                            <button className="w-full bg-maizena text-black py-5 rounded-2xl font-black uppercase" onClick={() => {
-                                const id = modal.data;
-                                const senha = document.getElementById('pass-input').value;
-                                if (id === 'admin' && senha === SENHA_ADM_PADRAO) setUserLogado({id:'admin', nome:'ADM', role:'admin'});
-                                else {
-                                    const f = funcionarios.find(u => u.id === id && u.senha === senha);
-                                    if(f) setUserLogado({...f, role:'user'});
-                                    else alert("Senha incorreta");
-                                }
-                            }}>Entrar</button>
+                            <div>
+                                <label className="text-[10px] font-black text-zinc-500 uppercase block mb-2 ml-1">Usuário / Funcionário</label>
+                                <select value={id} onChange={e => setId(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none text-sm appearance-none">
+                                    <option value="">Selecione...</option>
+                                    <option value="admin">ADMINISTRADOR</option>
+                                    {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-zinc-500 uppercase block mb-2 ml-1">Senha de Acesso</label>
+                                <input type="password" value={senha} onChange={e => setSenha(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none text-sm" />
+                            </div>
+                            <button onClick={() => onLogin(id, senha)} className="w-full bg-maizena text-black py-5 rounded-2xl font-black text-sm uppercase mt-6 hover:scale-[1.02] active:scale-95 transition">ENTRAR NO SISTEMA</button>
                         </div>
                     </div>
                 </div>
             );
+        };
+
+        const ProductCard = ({ produto, podeEditar, onAddCarrinho, onIncluir, onEstorno, onEdit, onDelete }) => (
+            <div className="bg-maizena rounded-3xl overflow-hidden h-[290px] sm:h-[350px] relative shadow-xl flex flex-col">
+                <div className="relative h-[60%] w-full">
+                    <img src={produto.imagem || 'https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=400'} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+                    {produto.tamanho && <div className="absolute top-2 left-2 bg-black text-maizena font-black text-xs sm:text-sm px-3 py-1.5 rounded-xl border border-maizena/50 shadow-lg uppercase">{produto.tamanho}</div>}
+                    {podeEditar && (
+                        <div className="absolute top-2 right-2 flex gap-1 z-10">
+                            <button onClick={onEdit} className="bg-black/60 backdrop-blur-md text-white p-2 rounded-lg"><Icon name="edit-3" size={14}/></button>
+                            <button onClick={onDelete} className="bg-soft-red/80 backdrop-blur-md text-white p-2 rounded-lg"><Icon name="x" size={14}/></button>
+                        </div>
+                    )}
+                </div>
+                
+                <div className="bg-zinc-900 p-3 flex-1 flex flex-col justify-between border-t border-zinc-800">
+                    <div className="flex justify-between items-start gap-2">
+                        <div className="overflow-hidden">
+                            <h3 className="text-white font-bold text-[10px] sm:text-xs leading-tight uppercase truncate">{produto.nome}</h3>
+                            <p className="text-maizena font-black text-sm sm:text-base mt-0.5">R$ {parseFloat(produto.valor).toFixed(2)}</p>
+                        </div>
+                        <div className="bg-black border border-zinc-800 px-2 py-1 rounded-lg text-center min-w-[36px]">
+                            <span className="block text-[7px] font-black text-zinc-500 uppercase leading-none">QTD</span>
+                            <span className="text-white font-black text-sm">{produto.estoque}</span>
+                        </div>
+                    </div>
+                    
+                    <div className="flex gap-1 mt-2">
+                        <button onClick={onAddCarrinho} className="flex-1 bg-tech-green text-black font-black py-2 rounded-xl text-[10px] sm:text-[11px] flex items-center justify-center gap-2 active:scale-95 transition">
+                            <Icon name="shopping-cart" size={14}/> ADICIONAR
+                        </button>
+                        <button onClick={onIncluir} className="bg-black border border-zinc-800 text-white p-2 rounded-xl active:scale-95 transition"><Icon name="plus" size={14}/></button>
+                        {podeEditar && <button onClick={onEstorno} className="bg-soft-orange text-black p-2 rounded-xl active:scale-95 transition"><Icon name="refresh-ccw" size={14}/></button>}
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ModuloCaixa = ({ produtos, funcionarios, onFinalizar, onReservar, carrinho, setCarrinho }) => {
+            const [busca, setBusca] = useState(''); const [cliente, setCliente] = useState(''); const [pagamentos, setPagamentos] = useState([]); const [vendedorId, setVendedorId] = useState('');
+            const filtrados = busca.length > 1 ? produtos.filter(p => p.nome.toLowerCase().includes(busca.toLowerCase())) : [];
+            const total = carrinho.reduce((acc, item) => acc + parseFloat(item.valor), 0);
+            const totalPago = pagamentos.reduce((acc, p) => acc + parseFloat(p.valor || 0), 0);
+
+            const addAoCarrinho = (p) => { if(p.estoque <= 0) return alert("Sem estoque!"); setCarrinho([...carrinho, p]); setBusca(''); };
+            const addPagamento = (forma) => { const resto = total - totalPago; if(resto > 0) setPagamentos([...pagamentos, { forma, valor: resto }]); };
 
             return (
-                <div className="max-w-[1400px] mx-auto min-h-screen flex flex-col">
-                    <header className="p-4 flex justify-between items-center border-b border-zinc-800 bg-[#111111] sticky top-0 z-40">
-                        <h1 className="text-xl font-black text-maizena italic uppercase">{config.nome}</h1>
-                        <div className="flex bg-zinc-900 p-1 rounded-2xl gap-1">
-                            <button onClick={() => setAbaAtiva('catalogo')} className={`px-4 py-2 rounded-xl text-[10px] font-bold ${abaAtiva === 'catalogo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Loja</button>
-                            {userLogado.role === 'admin' && <button onClick={() => setAbaAtiva('admin')} className={`px-4 py-2 rounded-xl text-[10px] font-bold ${abaAtiva === 'admin' ? 'bg-white text-black' : 'text-zinc-500'}`}>ADM</button>}
-                            <button onClick={() => setUserLogado(null)} className="px-4 py-2 text-red-500"><Icon name="log-out" size={16}/></button>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-6xl mx-auto pb-10">
+                    <div className="lg:col-span-2 space-y-4">
+                        <div className="bg-zinc-900 p-5 rounded-[24px] border border-zinc-800">
+                            <label className="block text-[10px] font-black text-maizena uppercase tracking-widest mb-2">Vendedor Responsável *</label>
+                            <select value={vendedorId} onChange={e => setVendedorId(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white font-bold outline-none text-sm">
+                                <option value="">ESCOLHER...</option>
+                                <option value="admin">ADMINISTRADOR</option>
+                                {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
+                            </select>
                         </div>
-                    </header>
-
-                    <main className="p-4 flex-1">
-                        {abaAtiva === 'catalogo' && (
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                                {produtos.map(p => (
-                                    <div key={p.id} className="bg-maizena rounded-[2rem] overflow-hidden product-card relative">
-                                        <img src={p.imagem} className="w-full h-full object-cover opacity-90" />
-                                        {p.tamanho && (
-                                            <div className="absolute top-4 left-4 bg-black text-maizena font-black text-3xl px-6 py-3 rounded-2xl border-2 border-maizena uppercase">
-                                                {p.tamanho}
-                                            </div>
-                                        )}
-                                        <div className="absolute bottom-4 left-4 right-4 bg-black/80 p-3 rounded-2xl border border-white/10">
-                                            <p className="text-white font-bold text-[10px] uppercase truncate">{p.nome}</p>
-                                            <p className="text-maizena font-black text-sm">R$ {parseFloat(p.valor).toFixed(2)}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                        {abaAtiva === 'admin' && (
-                            <div className="max-w-xl mx-auto space-y-8">
-                                <div className="bg-zinc-900 p-6 rounded-[32px] border border-zinc-800">
-                                    <h3 className="text-maizena font-black uppercase text-xs mb-4">Novo Funcionário</h3>
-                                    <div className="space-y-3">
-                                        <input id="f-nome" placeholder="Nome" className="w-full bg-black p-4 rounded-xl text-white outline-none border border-zinc-800" />
-                                        <input id="f-senha" placeholder="Senha" className="w-full bg-black p-4 rounded-xl text-white outline-none border border-zinc-800" />
-                                        <button className="w-full bg-tech-green text-black py-4 rounded-xl font-black uppercase" onClick={() => {
-                                            const n = document.getElementById('f-nome').value;
-                                            const s = document.getElementById('f-senha').value;
-                                            if(n && s) {
-                                                setFuncionarios([...funcionarios, {id: Date.now().toString(), nome: n, senha: s}]);
-                                                document.getElementById('f-nome').value = '';
-                                                document.getElementById('f-senha').value = '';
-                                                alert("Funcionário guardado!");
-                                            }
-                                        }}>Guardar Funcionário</button>
-                                    </div>
-                                </div>
-                                <div className="space-y-2">
-                                    <h3 className="text-zinc-500 font-black uppercase text-[10px] ml-2">Lista de Acesso</h3>
-                                    {funcionarios.map(f => (
-                                        <div key={f.id} className="bg-zinc-900 p-4 rounded-2xl flex justify-between items-center border border-zinc-800">
-                                            <span className="font-bold uppercase text-sm">{f.nome}</span>
-                                            <button onClick={() => setFuncionarios(funcionarios.filter(x => x.id !== f.id))} className="text-red-500"><Icon name="trash" size={18}/></button>
-                                        </div>
+                        <div className="bg-zinc-900 p-5 rounded-[24px] border border-zinc-800 relative">
+                            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Procurar mais produtos..." className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white font-bold outline-none text-sm" />
+                            {filtrados.length > 0 && (
+                                <div className="absolute top-full left-0 right-0 bg-zinc-800 border border-zinc-700 rounded-xl mt-2 z-50 overflow-hidden shadow-2xl max-h-60 overflow-y-auto">
+                                    {filtrados.map(p => (
+                                        <button key={p.id} onClick={() => addAoCarrinho(p)} className="w-full p-4 hover:bg-zinc-700 flex justify-between items-center border-b border-zinc-700 last:border-0 text-left">
+                                            <span className="font-bold text-xs uppercase text-white">{p.nome} {p.tamanho && `[${p.tamanho}]`}</span>
+                                            <span className="font-black text-maizena text-sm">R$ {parseFloat(p.valor).toFixed(2)}</span>
+                                        </button>
                                     ))}
                                 </div>
+                            )}
+                        </div>
+                        <div className="bg-zinc-900 rounded-[24px] border border-zinc-800 p-5">
+                            <h3 className="font-black italic uppercase text-xs mb-4 text-zinc-500 border-b border-zinc-800 pb-2">Itens no Carrinho</h3>
+                            <div className="max-h-[300px] overflow-y-auto space-y-2">
+                                {carrinho.map((item, idx) => (
+                                    <div key={idx} className="flex justify-between items-center bg-black p-3 rounded-xl border border-zinc-800">
+                                        <div className="flex items-center gap-3">
+                                            <button onClick={() => setCarrinho(carrinho.filter((_, i) => i !== idx))} className="text-soft-red"><Icon name="trash" size={16}/></button>
+                                            <span className="font-bold text-[10px] sm:text-xs uppercase">{item.nome}</span>
+                                        </div>
+                                        <span className="font-black text-xs text-maizena">R$ {parseFloat(item.valor).toFixed(2)}</span>
+                                    </div>
+                                ))}
+                                {carrinho.length === 0 && <p className="text-xs text-zinc-600 text-center py-4">Carrinho vazio</p>}
                             </div>
-                        )}
-                    </main>
+                        </div>
+                    </div>
+                    <div className="space-y-4">
+                        <div className="bg-maizena p-6 rounded-[24px] text-black text-center shadow-lg">
+                            <p className="font-black text-[10px] uppercase opacity-70 mb-1">Total a Pagar</p>
+                            <h3 className="text-4xl font-black tracking-tighter">R$ {total.toFixed(2)}</h3>
+                        </div>
+                        <div className="bg-zinc-900 p-6 rounded-[24px] border border-zinc-800">
+                            <div className="grid grid-cols-2 gap-2 mb-4">
+                                {FORMAS_PAGAMENTO.map(f => (
+                                    <button key={f} onClick={() => addPagamento(f)} className="p-3 bg-black border border-zinc-800 rounded-xl text-[9px] font-black uppercase hover:border-maizena transition">{f}</button>
+                                ))}
+                            </div>
+                            {pagamentos.map((p, idx) => (
+                                <div key={idx} className="flex gap-2 items-center mb-2">
+                                    <div className="flex-1 bg-black p-3 rounded-xl border border-zinc-800 flex justify-between items-center">
+                                        <span className="text-[10px] font-black uppercase text-zinc-400">{p.forma}</span>
+                                        <input type="number" value={p.valor} onChange={e => { const n = [...pagamentos]; n[idx].valor = e.target.value; setPagamentos(n); }} className="bg-transparent text-right font-black text-maizena outline-none w-20 text-sm" />
+                                    </div>
+                                    <button onClick={() => setPagamentos(pagamentos.filter((_, i) => i !== idx))} className="text-zinc-600"><Icon name="x" size={18}/></button>
+                                </div>
+                            ))}
+                            <input placeholder="Nome do Cliente (Opcional)" value={cliente} onChange={e => setCliente(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white text-xs my-4 outline-none" />
+                            <button disabled={total <= 0 || totalPago < total || !vendedorId} onClick={() => onFinalizar(carrinho, cliente, pagamentos, total, vendedorId === 'admin' ? {id:'admin', nome:'ADM'} : funcionarios.find(f => f.id === vendedorId))} className={`w-full py-4 rounded-xl font-black uppercase text-xs mb-3 transition ${totalPago >= total && total > 0 && vendedorId ? 'bg-tech-green text-black' : 'bg-zinc-800 text-zinc-600'}`}>CONFIRMAR COMPRA</button>
+                            <button disabled={total <= 0 || !vendedorId} onClick={() => onReservar(carrinho, total, vendedorId === 'admin' ? {id:'admin', nome:'ADM'} : funcionarios.find(f => f.id === vendedorId))} className={`w-full py-4 rounded-xl font-black uppercase text-xs transition border-2 ${total > 0 && vendedorId ? 'border-maizena text-maizena hover:bg-maizena hover:text-black' : 'border-zinc-800 text-zinc-600'}`}>CRIAR RESERVA</button>
+                        </div>
+                    </div>
                 </div>
             );
         };
+
+        const ModuloADM = ({ funcionarios, setFuncionarios, onEditFunc, onAddFunc, onConfig, setAbaAtiva, dbSizePct, onResetData }) => (
+            <div className="max-w-4xl mx-auto space-y-6">
+                <div><h2 className="text-2xl sm:text-3xl font-black italic uppercase tracking-tighter">Painel ADM</h2></div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <button onClick={() => setAbaAtiva('resumo')} className="bg-zinc-900 text-maizena p-6 rounded-3xl border border-zinc-800 font-black text-xs uppercase flex justify-between items-center"><span className="flex items-center gap-3"><Icon name="file-text"/> Relatórios</span><Icon name="chevron-right" size={16}/></button>
+                    <button onClick={() => setAbaAtiva('metas')} className="bg-zinc-900 text-maizena p-6 rounded-3xl border border-zinc-800 font-black text-xs uppercase flex justify-between items-center"><span className="flex items-center gap-3"><Icon name="trending-up"/> Metas e Comissões</span><Icon name="chevron-right" size={16}/></button>
+                    <button onClick={onConfig} className="bg-zinc-900 text-white p-6 rounded-3xl border border-zinc-800 font-black text-xs uppercase flex justify-between items-center"><span className="flex items-center gap-3"><Icon name="settings"/> Configurar Loja</span><Icon name="chevron-right" size={16}/></button>
+                    <button onClick={onAddFunc} className="bg-maizena text-black p-6 rounded-3xl font-black text-xs uppercase flex justify-between items-center"><span className="flex items-center gap-3"><Icon name="user-plus"/> Adicionar Equipa</span><Icon name="chevron-right" size={16}/></button>
+                </div>
+                <div className="bg-soft-red/10 border border-soft-red/20 p-6 rounded-3xl mt-6">
+                    <h3 className="text-soft-red font-black uppercase text-xs mb-4 flex items-center gap-2"><Icon name="alert-triangle" size={16}/> Zona de Perigo</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <button onClick={() => onResetData('vendas')} className="bg-black/50 border border-soft-red/30 text-white p-4 rounded-xl font-black text-[10px] uppercase">Limpar Histórico Vendas</button>
+                        <button onClick={() => onResetData('tudo')} className="bg-soft-red text-black p-4 rounded-xl font-black text-[10px] uppercase shadow-lg">Zerar Todo o Sistema</button>
+                    </div>
+                </div>
+                <div className="mt-8">
+                    <h3 className="text-[10px] font-black text-zinc-500 uppercase mb-4 ml-2">Equipa Cadastrada</h3>
+                    <div className="space-y-3">
+                        {funcionarios.map(f => (
+                            <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-5 rounded-2xl flex justify-between items-center">
+                                <div><h3 className="font-black text-sm uppercase">{f.nome}</h3></div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => onEditFunc(f)} className="p-3 bg-zinc-800 rounded-xl text-white"><Icon name="edit" size={16}/></button>
+                                    <button onClick={() => { if(confirm("Excluir?")) setFuncionarios(funcionarios.filter(x => x.id !== f.id)) }} className="p-3 bg-soft-red/10 text-soft-red rounded-xl"><Icon name="trash" size={16}/></button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ResumoDiario = ({ vendas, config, user, onViewReserva }) => {
+            const [filtro, setFiltro] = useState(new Date().toLocaleDateString('en-CA'));
+            const dados = useMemo(() => {
+                const f = vendas.filter(v => new Date(v.data).toLocaleDateString('pt-BR') === new Date(filtro + "T12:00:00").toLocaleDateString('pt-BR') && !v.estornada && (user.role === 'admin' ? true : v.vendedorId === user.id));
+                return { lista: f, qtd: f.reduce((a, v) => a + (v.isMulti ? v.itens.length : 1), 0), total: f.reduce((a, v) => a + v.valor, 0) };
+            }, [vendas, filtro, user]);
+
+            return (
+                <div className="max-w-4xl mx-auto space-y-6">
+                    <div className="flex flex-col sm:flex-row justify-between sm:items-end gap-4">
+                        <h2 className="text-2xl font-black italic uppercase tracking-tighter">Resumo de Vendas</h2>
+                        <input type="date" value={filtro} onChange={e => setFiltro(e.target.value)} className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl text-white font-bold text-sm w-full sm:w-auto" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-maizena p-6 rounded-3xl text-black"><p className="font-black text-[10px] uppercase opacity-70">Itens</p><h3 className="text-4xl font-black">{dados.qtd}</h3></div>
+                        <div className="bg-tech-green p-6 rounded-3xl text-black"><p className="font-black text-[10px] uppercase opacity-70">Receita Bruta</p><h3 className="text-2xl sm:text-3xl font-black">R$ {dados.total.toFixed(2)}</h3></div>
+                    </div>
+                    <div className="bg-zinc-900 rounded-3xl border border-zinc-800 overflow-hidden">
+                        {dados.lista.map(v => (
+                            <div key={v.id} className="p-4 border-b border-zinc-800 flex justify-between items-center text-xs sm:text-sm">
+                                <div><p className="font-black uppercase">{v.nome}</p><p className="text-[10px] text-zinc-500">{v.cliente} • {v.vendedorNome}</p></div>
+                                <div className="text-right"><p className="font-black text-tech-green">R$ {v.valor.toFixed(2)}</p>{v.isReserva && <span className="text-[8px] bg-maizena text-black px-2 py-1 rounded mt-1 inline-block font-black">RESERVA</span>}</div>
+                            </div>
+                        ))}
+                        {dados.lista.length === 0 && <p className="text-center py-10 text-zinc-600 font-bold text-xs uppercase">Nenhuma venda na data</p>}
+                    </div>
+                </div>
+            );
+        };
+
+        const ModuloReservados = ({ vendas, onViewReserva, onToggleRetirado }) => {
+            const reservasAtivas = vendas.filter(v => v.isReserva && !v.estornada);
+            return (
+                <div className="max-w-4xl mx-auto space-y-6">
+                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">Reservas Ativas</h2>
+                    <div className="grid gap-4">
+                        {reservasAtivas.map(v => (
+                            <div key={v.id} className={`p-5 rounded-3xl border ${v.retirado ? 'bg-black border-tech-green/30' : 'bg-zinc-900 border-zinc-800'}`}>
+                                <div className="flex justify-between items-start mb-3">
+                                    <div>
+                                        <h3 className="font-black text-lg text-maizena uppercase">{v.cliente}</h3>
+                                        <p className="text-xs text-zinc-400 font-bold">{v.telefone}</p>
+                                    </div>
+                                    <span className="font-black text-tech-green text-xl">R$ {parseFloat(v.valor).toFixed(2)}</span>
+                                </div>
+                                <p className="text-[10px] text-zinc-500 uppercase font-black mb-4">Itens: {v.nome}</p>
+                                <div className="flex gap-2">
+                                    <button onClick={() => onToggleRetirado(v.id)} className={`flex-1 py-3 rounded-xl font-black text-[9px] uppercase transition ${v.retirado ? 'bg-zinc-800 text-white' : 'bg-tech-green text-black'}`}>{v.retirado ? 'Desfazer Retirada' : 'Marcar Retirado'}</button>
+                                    <button onClick={() => onViewReserva(v)} className="bg-zinc-800 text-white px-4 py-3 rounded-xl font-black text-[9px] uppercase"><Icon name="eye" size={14}/></button>
+                                </div>
+                            </div>
+                        ))}
+                        {reservasAtivas.length === 0 && <p className="text-center py-10 text-zinc-600 font-bold text-xs uppercase">Nenhuma reserva ativa</p>}
+                    </div>
+                </div>
+            );
+        };
+
+        const ModuloMetas = ({ user, vendas, funcionarios }) => {
+            const targets = user.role === 'admin' ? funcionarios : [funcionarios.find(f => f.id === user.id)].filter(Boolean);
+            return (
+                <div className="max-w-4xl mx-auto space-y-6">
+                    <h2 className="text-2xl font-black italic uppercase tracking-tighter">Metas & Performance</h2>
+                    {targets.map(f => {
+                        const t = vendas.filter(v => v.vendedorId === f.id && !v.estornada).reduce((acc, v) => acc + v.valor, 0);
+                        const pct = Math.min((t / (f.meta || 1)) * 100, 100);
+                        return (
+                            <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl">
+                                <h3 className="text-xl font-black uppercase mb-4">{f.nome}</h3>
+                                <div className="flex justify-between text-[10px] font-black uppercase mb-2"><span className="text-zinc-500">Progresso</span><span className="text-maizena">{pct.toFixed(1)}%</span></div>
+                                <div className="h-4 bg-black rounded-full overflow-hidden mb-4"><div className="h-full bg-maizena" style={{width: `${pct}%`}}/></div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="bg-black p-4 rounded-2xl"><p className="text-[9px] text-zinc-500 uppercase font-black">Vendido</p><p className="font-black text-sm">R$ {t.toFixed(2)}</p></div>
+                                    <div className="bg-black p-4 rounded-2xl"><p className="text-[9px] text-zinc-500 uppercase font-black">Meta / Comiss.</p><p className="font-black text-sm text-tech-green">R$ {((t * (f.comissao || 0)) / 100).toFixed(2)}</p></div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        };
+
+        const ModalNovo = ({ onSave, onClose, produtoParaEditar = null }) => {
+            const [f, setF] = useState(produtoParaEditar || { nome: '', valor: '', estoque: '', imagem: '', tamanho: '', custo: '' });
+            const handleImg = (e) => { const reader = new FileReader(); reader.onload = ev => setF({...f, imagem: ev.target.result}); reader.readAsDataURL(e.target.files[0]); };
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] w-full max-w-sm max-h-[90vh] overflow-y-auto">
+                        <h2 className="text-xl font-black mb-6 text-maizena italic uppercase text-center">{produtoParaEditar ? 'Editar' : 'Novo'} Produto</h2>
+                        <div className="space-y-4">
+                            <Input label="Nome" value={f.nome} onChange={v => setF({...f, nome: v})} />
+                            <div className="grid grid-cols-2 gap-3">
+                                <Input label="Preço" type="number" value={f.valor} onChange={v => setF({...f, valor: v})} />
+                                <Input label="Tam (G,42)" value={f.tamanho||''} onChange={v => setF({...f, tamanho: v})} />
+                            </div>
+                            {!produtoParaEditar && <Input label="Estoque" type="number" value={f.estoque} onChange={v => setF({...f, estoque: parseInt(v)})} />}
+                            <div className="border border-dashed border-zinc-700 rounded-2xl h-32 flex items-center justify-center relative bg-black">
+                                {f.imagem ? <img src={f.imagem} className="w-full h-full object-cover rounded-2xl" /> : <div className="text-center text-zinc-600"><Icon name="camera" className="mx-auto"/><span className="text-[10px] uppercase font-black mt-1 block">Foto</span></div>}
+                                <input type="file" onChange={handleImg} className="absolute inset-0 opacity-0" />
+                            </div>
+                            <button onClick={() => onSave(f)} className="w-full bg-tech-green text-black font-black py-4 rounded-xl uppercase">Salvar</button>
+                            <button onClick={onClose} className="w-full py-2 text-zinc-500 font-bold uppercase text-xs">Cancelar</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalIncluir = ({ produto, onConfirm, onClose }) => {
+            const [q, setQ] = useState(1);
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 p-6 rounded-3xl w-full max-w-xs text-center border border-zinc-800">
+                        <p className="font-black text-[10px] uppercase text-zinc-500 mb-2">Repor Estoque</p>
+                        <p className="font-bold text-white text-sm uppercase mb-4">{produto.nome}</p>
+                        <input type="number" value={q} onChange={e => setQ(e.target.value)} className="w-full bg-black text-maizena text-4xl font-black text-center p-4 rounded-xl mb-4 outline-none" />
+                        <button onClick={() => onConfirm(produto.id, q)} className="w-full bg-tech-green text-black py-4 rounded-xl font-black uppercase">Adicionar</button>
+                        <button onClick={onClose} className="w-full mt-2 py-2 text-zinc-500 font-bold uppercase text-xs">Cancelar</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalListaEstorno = ({ produto, vendas, onConfirm, onClose }) => (
+            <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] w-full max-w-sm max-h-[80vh] flex flex-col">
+                    <h2 className="text-lg font-black mb-4 italic uppercase text-maizena text-center">Estornar Venda</h2>
+                    <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+                        {vendas.map(v => (
+                            <div key={v.id} className="bg-black border border-zinc-800 p-3 rounded-xl flex justify-between items-center">
+                                <div><p className="font-black text-white text-xs uppercase">{v.cliente}</p><p className="text-[9px] text-zinc-500">{new Date(v.data).toLocaleDateString('pt-BR')}</p></div>
+                                <button onClick={() => onConfirm(v.id)} className="bg-soft-orange text-black px-3 py-2 rounded-lg font-black text-[9px] uppercase">Estornar</button>
+                            </div>
+                        ))}
+                        {vendas.length === 0 && <p className="text-center py-6 text-zinc-600 font-bold text-xs uppercase">Sem vendas ativas</p>}
+                    </div>
+                    <button onClick={onClose} className="mt-4 py-3 bg-zinc-800 text-white rounded-xl font-black uppercase text-xs">Fechar</button>
+                </div>
+            </div>
+        );
+
+        const ModalReserva = ({ onConfirm, onClose }) => {
+            const [n, setN] = useState(''); const [t, setT] = useState(''); const [c, setC] = useState(null);
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 p-6 rounded-[32px] w-full max-w-sm border border-zinc-800">
+                        <h2 className="text-lg font-black mb-4 text-maizena text-center uppercase italic">Dados da Reserva</h2>
+                        <div className="space-y-3">
+                            <Input label="Cliente" value={n} onChange={setN} />
+                            <Input label="WhatsApp" value={t} onChange={setT} />
+                            <div className="mt-2">
+                                <label className="text-[10px] font-black text-zinc-500 uppercase">Comprovante PIX</label>
+                                <input type="file" onChange={e => { const r = new FileReader(); r.onload=ev=>setC(ev.target.result); r.readAsDataURL(e.target.files[0]); }} className="block mt-2 text-[10px] text-zinc-500" />
+                            </div>
+                            <button disabled={!n || !t || !c} onClick={() => onConfirm(n,t,c)} className={`w-full py-4 rounded-xl font-black uppercase mt-4 ${n&&t&&c?'bg-maizena text-black':'bg-zinc-800 text-zinc-600'}`}>Confirmar</button>
+                            <button onClick={onClose} className="w-full py-2 text-zinc-500 font-bold text-xs uppercase">Cancelar</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalVerReserva = ({ venda, onClose }) => (
+            <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] w-full max-w-sm max-h-[90vh] flex flex-col">
+                    <h2 className="text-lg font-black mb-4 text-maizena italic uppercase text-center">Detalhes</h2>
+                    <div className="overflow-y-auto pr-2 space-y-4">
+                        <div className="bg-black p-4 rounded-2xl"><p className="text-[10px] text-zinc-500 font-black uppercase">Cliente</p><p className="font-bold text-white text-sm">{venda.cliente}</p></div>
+                        <div className="bg-black p-4 rounded-2xl"><p className="text-[10px] text-zinc-500 font-black uppercase">Telefone</p><p className="font-bold text-white text-sm">{venda.telefone}</p></div>
+                        {venda.comprovantePix && <img src={venda.comprovantePix} className="w-full rounded-2xl border border-zinc-800" />}
+                    </div>
+                    <button onClick={onClose} className="w-full mt-4 bg-zinc-800 text-white py-4 rounded-xl font-black uppercase text-xs">Fechar</button>
+                </div>
+            </div>
+        );
+
+        const ModalFuncionario = ({ funcionario, onSave, onClose }) => {
+            const [f, setF] = useState(funcionario || { nome: '', senha: '', meta: '', comissao: '', permissoes: { catalogo: true, caixa: true, resumo: true, reservados: true, configuracoes: false, metas: true }});
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] w-full max-w-sm max-h-[90vh] overflow-y-auto">
+                        <h2 className="text-lg font-black mb-4 text-maizena italic uppercase text-center">Funcionario</h2>
+                        <Input label="Nome" value={f.nome} onChange={v => setF({...f, nome: v})} />
+                        <Input label="Senha" type="password" value={f.senha} onChange={v => setF({...f, senha: v})} />
+                        <div className="grid grid-cols-2 gap-2 mt-2">
+                            <Input label="Meta R$" type="number" value={f.meta} onChange={v => setF({...f, meta: parseFloat(v)})} />
+                            <Input label="Comis %" type="number" value={f.comissao} onChange={v => setF({...f, comissao: parseFloat(v)})} />
+                        </div>
+                        <div className="mt-4 bg-black p-4 rounded-2xl">
+                            <p className="text-[10px] font-black text-zinc-500 uppercase mb-2">Acessos</p>
+                            {Object.keys(f.permissoes).map(k => (
+                                <label key={k} className="flex justify-between p-2 text-xs uppercase font-bold border-b border-zinc-800 last:border-0"><span className="text-white">{k}</span><input type="checkbox" checked={f.permissoes[k]} onChange={e => setF({...f, permissoes:{...f.permissoes, [k]: e.target.checked}})} className="accent-maizena"/></label>
+                            ))}
+                        </div>
+                        <button onClick={() => onSave(f)} className="w-full bg-tech-green text-black py-4 rounded-xl font-black uppercase mt-4">Salvar</button>
+                        <button onClick={onClose} className="w-full py-2 mt-2 text-zinc-500 font-bold uppercase text-xs">Cancelar</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalConfig = ({ config, onSave, onClose }) => {
+            const [f, setF] = useState(config);
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 p-6 rounded-[32px] w-full max-w-sm">
+                        <Input label="Nome Loja" value={f.nome} onChange={v => setF({...f, nome: v})} />
+                        <button onClick={() => {onSave(f); onClose()}} className="w-full bg-tech-green text-black py-4 rounded-xl font-black uppercase mt-6">Salvar</button>
+                        <button onClick={onClose} className="w-full py-2 mt-2 text-zinc-500 font-bold uppercase text-xs">Cancelar</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalCupom = ({ venda, config, onClose }) => (
+            <div className="fixed inset-0 bg-black/98 z-50 flex items-center justify-center p-4">
+                <div className="bg-white p-6 w-[300px] text-black shadow-2xl">
+                    <h2 className="font-black text-xl italic uppercase text-center mb-4">{config.nome}</h2>
+                    <div className="text-[10px] space-y-1 mb-4 border-b border-dashed pb-4">
+                        <div className="flex justify-between"><span>Vend:</span><span className="font-bold">{venda.vendedorNome}</span></div>
+                        <div className="flex justify-between"><span>Cli:</span><span className="font-bold">{venda.cliente}</span></div>
+                    </div>
+                    <div className="text-xl font-black flex justify-between mb-4 border-b border-dashed pb-4"><span>TOTAL</span><span>R$ {venda.valor.toFixed(2)}</span></div>
+                    <button onClick={() => window.print()} className="w-full bg-black text-white py-3 rounded-xl font-black text-xs uppercase mb-2">Imprimir</button>
+                    <button onClick={onClose} className="w-full text-zinc-500 font-bold uppercase text-xs py-2">Fechar</button>
+                </div>
+            </div>
+        );
+
+        const Input = ({ label, type="text", value, onChange, placeholder, inputClass = "" }) => (
+            <div className="mb-3">
+                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1 ml-1">{label}</label>
+                <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={`w-full bg-black border border-zinc-800 p-4 rounded-xl text-white font-bold outline-none focus:border-maizena text-sm ${inputClass}`} />
+            </div>
+        );
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
